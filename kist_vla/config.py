@@ -65,10 +65,19 @@ class PolicyConfig:
 
 @dataclass
 class IOConfig:
-    """ZMQ endpoints toward gearsonic, the camera server, and the operator."""
+    """Endpoints toward gearsonic, the camera server, and the operator."""
+
+    transport: Literal["zmq", "dds"] = "zmq"
+    """Outbound action transport. 'zmq' = latent protocol v4 (reference
+    compatible, sim tools); 'dds' = kist_msgs::LatentActionStep over
+    CycloneDDS (real-robot direction, see idl/kist_latent_action.idl).
+    Camera/state/keyboard inputs remain ZMQ for now."""
+
+    dds_domain_id: int = 0
+    """DDS domain id (dds transport only)."""
 
     action_host: str = "*"
-    """Bind address for the latent-action PUB socket."""
+    """Bind address for the latent-action PUB socket (zmq transport only)."""
 
     action_port: int = 5556
     """Port for latent actions to the gearsonic control loop."""

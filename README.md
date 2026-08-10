@@ -42,7 +42,24 @@ Single process, two threads:
 Every cross-boundary handoff keeps only the latest value (ZMQ CONFLATE
 sockets, maxsize-1 queues) — consumers see fresh data, never a backlog.
 
-## Interface contract (latent protocol v4)
+## Transports
+
+The runner core talks to the outside world through the Protocols in
+`kist_vla/io/interfaces.py`; the outbound action channel has two
+implementations selected by `--io.transport`:
+
+- **`zmq`** (default): latent protocol v4, byte-compatible with the NVIDIA
+  reference stack and its MuJoCo sim tools.
+- **`dds`**: `kist_msgs::LatentActionStep` over CycloneDDS
+  (`pip install -e ".[dds]"`). **`idl/kist_latent_action.idl` is the shared
+  contract** — the gearsonic C++ side codegens from it (`idlc -l cxx`), the
+  Python side mirrors it in `kist_vla/io/dds.py`; keep the two in sync.
+  QoS mirrors the ZMQ semantics: actions BestEffort+KeepLast(1) ("latest
+  wins"), commands Reliable. This is the real-robot direction; camera
+  (kist-ext-sensor-io) and robot state (unitree DDS topics) inputs are the
+  next channels to move.
+
+## Interface contract (latent protocol v4, zmq transport)
 
 Frozen wire format shared with gearsonic; see `kist_vla/protocol.py` and
 `tests/test_protocol.py` for the byte-level pin.
@@ -94,11 +111,17 @@ pose · `[` `]` toggle hands · `t` change prompt.
 
 ## Tests
 
-Unit tests run without a GPU, model, or robot:
+All tests run without a GPU, model, or robot:
 
 ```bash
 pytest
 ```
+
+This includes the **L1 loopback harness** (`tests/test_loopback.py`): the
+real runner over real ZMQ against fake sensors and a fake policy, verifying
+the 50 Hz stream, latency compensation, frame ordering, prompt changes, and
+control commands. DDS tests run when `cyclonedds` is installed and are
+skipped otherwise.
 
 ## Provenance
 

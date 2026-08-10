@@ -86,11 +86,16 @@ class VLARunner:
             if operator is not None
             else KeyboardSubscriber(host=config.io.keyboard_host, port=config.io.keyboard_port)
         )
-        self.action_sink: ActionSink = (
-            action_sink
-            if action_sink is not None
-            else ZmqActionSink(host=config.io.action_host, port=config.io.action_port)
-        )
+        if action_sink is not None:
+            self.action_sink: ActionSink = action_sink
+        elif config.io.transport == "dds":
+            from .io.dds import DdsActionSink
+
+            self.action_sink = DdsActionSink(domain_id=config.io.dds_domain_id)
+        else:
+            self.action_sink = ZmqActionSink(
+                host=config.io.action_host, port=config.io.action_port
+            )
 
         # Chunk playback + inference scheduling
         self.player = ActionChunkPlayer(config.action_horizon)

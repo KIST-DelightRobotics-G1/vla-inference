@@ -23,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+dds = ["cyclonedds"]
 
 [build-system]
 requires = ["setuptools>=68"]
