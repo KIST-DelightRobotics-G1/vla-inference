@@ -4,9 +4,10 @@
 // CycloneDDS idlc codegen: `idlc -l cxx` for C++, mirrored as IdlStruct
 // dataclasses in kist_vla/io/dds.py for Python — keep the two in sync).
 //
-// Topics (see kist_vla/io/dds.py for the authoritative constants):
-//   "kist/latent_action"  LatentActionStep, BestEffort + KeepLast(1), 50 Hz
-//   "kist/wbc_command"    WbcCommand,       Reliable   + KeepLast(8)
+// Topics (rt/kist/* per the ext-sensor-io convention; authoritative
+// constants: kist_vla/io/dds.py and gearsonic include/vla/vla_token_receiver.hpp):
+//   "rt/kist/latent_action"  LatentActionStep, Reliable + KeepLast(1), 50 Hz
+//   "rt/kist/wbc_command"    WbcCommand,       Reliable + KeepLast(8)
 //
 // Reader guidance (gearsonic side): pair the latent_action reader with a
 // Deadline QoS (e.g. 100 ms) so a stalled publisher trips a deadline-missed

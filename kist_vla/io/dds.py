@@ -21,8 +21,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-LATENT_ACTION_TOPIC = "kist/latent_action"
-WBC_COMMAND_TOPIC = "kist/wbc_command"
+# rt/kist/* naming follows the kist-ext-sensor-io convention; must match
+# kist-gearsonic-inference include/vla/vla_token_receiver.hpp.
+LATENT_ACTION_TOPIC = "rt/kist/latent_action"
+WBC_COMMAND_TOPIC = "rt/kist/wbc_command"
 
 
 def _idl_types():
@@ -64,9 +66,22 @@ def get_dds_types():
 
 
 def latent_action_qos():
-    from cyclonedds.core import Policy, Qos
+    """Reliable + KeepLast(1): "latest wins" with universal reader matching.
 
-    return Qos(Policy.Reliability.BestEffort, Policy.History.KeepLast(1))
+    Reliable (not BestEffort) because DDS reliability must satisfy
+    reader-requested <= writer-offered: the gearsonic side subscribes via
+    unitree's ChannelSubscriber whose reader QoS we don't control — a
+    Reliable writer matches both Reliable and BestEffort readers. KeepLast(1)
+    keeps the latest-value semantics; max_blocking_time bounds write() if a
+    reliable reader ever stalls.
+    """
+    from cyclonedds.core import Policy, Qos
+    from cyclonedds.util import duration
+
+    return Qos(
+        Policy.Reliability.Reliable(max_blocking_time=duration(milliseconds=20)),
+        Policy.History.KeepLast(1),
+    )
 
 
 def command_qos():
