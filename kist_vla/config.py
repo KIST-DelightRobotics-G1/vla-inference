@@ -67,14 +67,26 @@ class PolicyConfig:
 class IOConfig:
     """Endpoints toward gearsonic, the camera server, and the operator."""
 
-    transport: Literal["zmq", "dds"] = "zmq"
+    action_transport: Literal["zmq", "dds"] = "zmq"
     """Outbound action transport. 'zmq' = latent protocol v4 (reference
     compatible, sim tools); 'dds' = kist_msgs::LatentActionStep over
-    CycloneDDS (real-robot direction, see idl/kist_latent_action.idl).
-    Camera/state/keyboard inputs remain ZMQ for now."""
+    CycloneDDS (real robot, see idl/kist_latent_action.idl)."""
+
+    camera_transport: Literal["zmq", "dds"] = "zmq"
+    """'zmq' = gear_sonic sensor-server wire format (sim tools);
+    'dds' = kist-ext-sensor-io CompressedColorFrame (real robot)."""
+
+    state_transport: Literal["zmq", "dds"] = "zmq"
+    """'zmq' = g1_debug topic from a re-publisher (reference stack);
+    'dds' = unitree rt/lowstate + rt/dex3/*/state directly (real robot,
+    no re-publisher needed)."""
 
     dds_domain_id: int = 0
-    """DDS domain id (dds transport only)."""
+    """DDS domain id (any dds transport)."""
+
+    dds_camera_topic: str = "rt/kist/camera/color/h264"
+    """kist-ext-sensor-io color topic mapped to the ego_view observation.
+    Per-camera streams use rt/kist/camera/<name>/color/h264."""
 
     action_host: str = "*"
     """Bind address for the latent-action PUB socket (zmq transport only)."""

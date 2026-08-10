@@ -45,19 +45,32 @@ sockets, maxsize-1 queues) — consumers see fresh data, never a backlog.
 ## Transports
 
 The runner core talks to the outside world through the Protocols in
-`kist_vla/io/interfaces.py`; the outbound action channel has two
-implementations selected by `--io.transport`:
+`kist_vla/io/interfaces.py`; each channel picks its transport independently
+(`--io.action-transport`, `--io.camera-transport`, `--io.state-transport`,
+each `zmq` by default):
 
-- **`zmq`** (default): latent protocol v4, byte-compatible with the NVIDIA
-  reference stack and its MuJoCo sim tools.
-- **`dds`**: `kist_msgs::LatentActionStep` over CycloneDDS
-  (`pip install -e ".[dds]"`). **`idl/kist_latent_action.idl` is the shared
-  contract** — the gearsonic C++ side codegens from it (`idlc -l cxx`), the
-  Python side mirrors it in `kist_vla/io/dds.py`; keep the two in sync.
-  QoS mirrors the ZMQ semantics: actions BestEffort+KeepLast(1) ("latest
-  wins"), commands Reliable. This is the real-robot direction; camera
-  (kist-ext-sensor-io) and robot state (unitree DDS topics) inputs are the
-  next channels to move.
+| Channel | `zmq` (reference/sim compatible) | `dds` (real robot) |
+|---|---|---|
+| actions → gearsonic | latent protocol v4 PUB :5556 | `kist_msgs::LatentActionStep` / `WbcCommand` (`kist_vla/io/dds.py`) |
+| camera | gear_sonic sensor server :5555 | kist-ext-sensor-io `CompressedColorFrame`, H.264 → PyAV decode (`kist_vla/io/dds_camera.py`) |
+| robot state | `g1_debug` re-publisher :5557 | unitree `rt/lowstate` + `rt/dex3/{left,right}/state` directly (`kist_vla/io/dds_state.py`) — no re-publisher process needed |
+
+DDS notes:
+
+- **`idl/kist_latent_action.idl` is the shared action contract** — the
+  gearsonic C++ side codegens from it (`idlc -l cxx`); the Python side
+  mirrors it in `kist_vla/io/dds.py`; keep the two in sync. The camera type
+  mirrors kist-ext-sensor-io's `idl/kist_camera_frames.idl`.
+- QoS mirrors the ZMQ semantics: streams BestEffort+KeepLast ("latest
+  wins"), commands Reliable.
+- State wire semantics were verified against the reference deploy
+  (`zmq_output_handler.hpp`): `body_q` = 29 absolute joint angles in Unitree
+  motor order; `base_quat` = **pelvis** IMU quaternion (w,x,y,z) from
+  LowState — not the torso IMU on `rt/secondary_imu`.
+- Install: `pip install -e ".[dds]"` plus unitree_sdk2py for the state
+  source (see pyproject comment).
+- Remaining hardware verification: Dex3 hand motor order and IMU quaternion
+  convention against the real robot / final data-collection pipeline.
 
 ## Interface contract (latent protocol v4, zmq transport)
 

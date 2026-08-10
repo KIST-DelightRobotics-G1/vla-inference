@@ -71,16 +71,30 @@ class VLARunner:
             print("WARNING: policy backend not reachable; inference will fail until it is up.")
 
         self.obs_builder = ObservationBuilder(language_key=config.language_key)
-        self.state_source: StateSource = (
-            state_source
-            if state_source is not None
-            else StateSubscriber(host=config.io.state_host, port=config.io.state_port)
-        )
-        self.camera: CameraSource = (
-            camera
-            if camera is not None
-            else CameraClient(host=config.io.camera_host, port=config.io.camera_port)
-        )
+
+        if state_source is not None:
+            self.state_source: StateSource = state_source
+        elif config.io.state_transport == "dds":
+            from .io.dds_state import DdsStateSource
+
+            self.state_source = DdsStateSource(domain_id=config.io.dds_domain_id)
+        else:
+            self.state_source = StateSubscriber(
+                host=config.io.state_host, port=config.io.state_port
+            )
+
+        if camera is not None:
+            self.camera: CameraSource = camera
+        elif config.io.camera_transport == "dds":
+            from .io.dds_camera import DdsCameraSource
+
+            self.camera = DdsCameraSource(
+                domain_id=config.io.dds_domain_id, topic=config.io.dds_camera_topic
+            )
+        else:
+            self.camera = CameraClient(
+                host=config.io.camera_host, port=config.io.camera_port
+            )
         self.operator: OperatorSource = (
             operator
             if operator is not None
@@ -88,7 +102,7 @@ class VLARunner:
         )
         if action_sink is not None:
             self.action_sink: ActionSink = action_sink
-        elif config.io.transport == "dds":
+        elif config.io.action_transport == "dds":
             from .io.dds import DdsActionSink
 
             self.action_sink = DdsActionSink(domain_id=config.io.dds_domain_id)
