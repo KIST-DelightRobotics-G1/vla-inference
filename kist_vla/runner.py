@@ -5,7 +5,7 @@ Single process, two threads (mirroring the reference
 
 - **Main thread**: 50 Hz publish loop. Consumes finished chunks, triggers new
   inferences, plays the cached chunk back one step per tick, and publishes
-  each step to gearsonic as a latent-protocol-v4 message. Never blocks.
+  each step to gearsonic through the ActionSink. Never blocks.
 - **Inference worker** (daemon): waits for a trigger, assembles the
   observation from the latest sensor data, runs the policy (~hundreds of ms),
   and hands the validated chunk back through a maxsize-1 queue.
@@ -14,7 +14,11 @@ Everywhere data crosses a boundary, only the latest value is kept (CONFLATE
 sockets, maxsize-1 queues) — a slow consumer sees fresh data, never a
 backlog.
 
-Operator keys (via the ZMQ keyboard channel):
+I/O and the policy are injected via the Protocols in ``io.interfaces``
+(defaults built from config), so tests and alternative transports (DDS) swap
+in without touching this loop.
+
+Operator keys (via the operator channel):
     p  pause / resume the policy loop
     k  start / stop the gearsonic control loop (PLANNER mode)
     i  blend to initial pose and switch gearsonic to POSE mode
@@ -29,16 +33,16 @@ import time
 from typing import Any
 
 import numpy as np
-import zmq
 
 from .chunking import ActionChunkPlayer, should_trigger_new_inference
 from .config import DEFAULT_INITIAL_MOTION_TOKEN, RunnerConfig
 from .g1_joints import CLOSED_HAND_Q, OPEN_HAND_Q
 from .io import CameraClient, KeyboardSubscriber, StateSubscriber
+from .io.interfaces import ActionSink, CameraSource, OperatorSource, StateSource
 from .io.keyboard import PROMPT_PREFIX
+from .io.zmq_action_sink import ZmqActionSink
 from .observation import ObservationBuilder
-from .policy_backend import create_policy
-from .protocol import build_command_message, pack_latent_action_message
+from .policy_backend import PolicyBackend, create_policy
 
 ACTION_KEYS = ("motion_token", "left_hand_joints", "right_hand_joints")
 
@@ -48,28 +52,44 @@ def _print_green(x: str) -> None:
 
 
 class VLARunner:
-    def __init__(self, config: RunnerConfig):
+    def __init__(
+        self,
+        config: RunnerConfig,
+        *,
+        policy: PolicyBackend | None = None,
+        camera: CameraSource | None = None,
+        state_source: StateSource | None = None,
+        operator: OperatorSource | None = None,
+        action_sink: ActionSink | None = None,
+    ):
         self.config = config
 
-        self.policy = create_policy(config.policy)
+        self.policy = policy if policy is not None else create_policy(config.policy)
         if self.policy.ping():
             _print_green("Policy backend is ready.")
         else:
             print("WARNING: policy backend not reachable; inference will fail until it is up.")
 
         self.obs_builder = ObservationBuilder(language_key=config.language_key)
-        self.state_sub = StateSubscriber(host=config.io.state_host, port=config.io.state_port)
-        self.camera = CameraClient(host=config.io.camera_host, port=config.io.camera_port)
-        self.keyboard = KeyboardSubscriber(
-            host=config.io.keyboard_host, port=config.io.keyboard_port
+        self.state_source: StateSource = (
+            state_source
+            if state_source is not None
+            else StateSubscriber(host=config.io.state_host, port=config.io.state_port)
         )
-
-        self._zmq_ctx = zmq.Context()
-        self.action_socket = self._zmq_ctx.socket(zmq.PUB)
-        self.action_socket.bind(f"tcp://{config.io.action_host}:{config.io.action_port}")
-        time.sleep(0.1)  # let subscribers attach before the first message
-        _print_green(
-            f"Latent action PUB bound to tcp://{config.io.action_host}:{config.io.action_port}"
+        self.camera: CameraSource = (
+            camera
+            if camera is not None
+            else CameraClient(host=config.io.camera_host, port=config.io.camera_port)
+        )
+        self.operator: OperatorSource = (
+            operator
+            if operator is not None
+            else KeyboardSubscriber(host=config.io.keyboard_host, port=config.io.keyboard_port)
+        )
+        self.action_sink: ActionSink = (
+            action_sink
+            if action_sink is not None
+            else ZmqActionSink(host=config.io.action_host, port=config.io.action_port)
         )
 
         # Chunk playback + inference scheduling
@@ -101,7 +121,7 @@ class VLARunner:
 
     def _prepare_observation(self) -> dict[str, Any] | None:
         camera_msg = self.camera.read()
-        state_msg = self.state_sub.get_msg()
+        state_msg = self.state_source.get_msg()
         return self.obs_builder.build(camera_msg, state_msg, self.prompt, log_errors=True)
 
     def _run_inference(self, observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -182,9 +202,7 @@ class VLARunner:
 
     def _send_cpp_command(self, start: bool, planner: bool = False) -> bool:
         try:
-            msg = build_command_message(start=start, stop=not start, planner=planner)
-            self.action_socket.send(msg)
-            time.sleep(0.01)
+            self.action_sink.send_command(start=start, planner=planner)
             self.cpp_loop_running = start
             self.cpp_mode = ("PLANNER" if planner else "POSE") if start else "OFF"
             _print_green(
@@ -204,13 +222,12 @@ class VLARunner:
     def _send_token(
         self, token: np.ndarray, left_hand: np.ndarray, right_hand: np.ndarray
     ) -> None:
-        msg = pack_latent_action_message(
+        self.action_sink.send_latent_action(
             motion_token=token,
-            frame_index=np.array([self.frame_counter], dtype=np.int64),
+            frame_index=self.frame_counter,
             left_hand_joints=left_hand,
             right_hand_joints=right_hand,
         )
-        self.action_socket.send(msg)
         self.last_sent_motion_token = np.asarray(token, dtype=np.float32).reshape(-1).copy()
 
     def _publish_initial_pose(self) -> None:
@@ -248,11 +265,11 @@ class VLARunner:
         _print_green("Initial pose blend complete.")
 
     # ------------------------------------------------------------------
-    # Keyboard handling
+    # Operator handling
     # ------------------------------------------------------------------
 
-    def _handle_keyboard(self) -> None:
-        key = self.keyboard.read_msg()
+    def _handle_operator(self) -> None:
+        key = self.operator.read_msg()
         if key is None:
             return
 
@@ -300,15 +317,18 @@ class VLARunner:
     # Main loop
     # ------------------------------------------------------------------
 
-    def run(self) -> None:
+    def run(self, stop_event: threading.Event | None = None) -> None:
+        """Run the publish loop until KeyboardInterrupt or ``stop_event`` is set."""
+        if stop_event is None:
+            stop_event = threading.Event()
         loop_period = 1.0 / self.config.action_publish_rate
         _print_green(f'Starting policy loop (prompt: "{self.prompt}", paused — press p)')
         self._worker.start()
 
         try:
-            while True:
+            while not stop_event.is_set():
                 t_start = time.monotonic()
-                self._handle_keyboard()
+                self._handle_operator()
 
                 # Consume a finished chunk first so the trigger check below
                 # sees a fresh last_inference_time.
@@ -374,11 +394,10 @@ class VLARunner:
         self._stop_event.set()
         if self._worker.is_alive():
             self._worker.join(timeout=1.0)
-        self.action_socket.close()
-        self._zmq_ctx.term()
-        self.state_sub.close()
+        self.action_sink.close()
+        self.state_source.close()
         self.camera.close()
-        self.keyboard.close()
+        self.operator.close()
         self.policy.close()
         print("Shutdown complete.")
 
