@@ -101,9 +101,12 @@ uv pip install -e ~/Isaac-GR00T        # local policy mode only
 
 ## Run
 
-A UNITREE_G1_SONIC-finetuned checkpoint is required (the base
-`nvidia/GR00T-N1.7-3B` has no SONIC action head). See the
-[finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl).
+**Scope**: this service does inference only — it consumes a finished
+checkpoint and streams action tokens. Data collection and finetuning happen
+outside this repo; a UNITREE_G1_SONIC-finetuned checkpoint is a hard input
+(the base `nvidia/GR00T-N1.7-3B` has no SONIC action head — see the
+[finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl)
+for how one is produced).
 
 ```bash
 # Single process (model in-process, default)
