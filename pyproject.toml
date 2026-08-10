@@ -1,0 +1,35 @@
+[project]
+name = "kist-vla-inference"
+version = "0.1.0"
+description = "GR00T N1.7 VLA inference service for the KIST Unitree G1 stack. Produces SONIC motion tokens (latent protocol v4) consumed by kist-gearsonic-inference."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+    "numpy",
+    "scipy",
+    "pyzmq",
+    "msgpack",
+    "msgpack-numpy",
+    "opencv-python-headless",
+    "tyro",
+]
+
+# The `local` policy backend additionally requires the `gr00t` package
+# (NVIDIA Isaac-GR00T, Python 3.12 only). It is not on PyPI — install from
+# the local clone:
+#   uv pip install -e ~/Isaac-GR00T
+# The `remote` backend and all unit tests run without it.
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["kist_vla", "kist_vla.io"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
