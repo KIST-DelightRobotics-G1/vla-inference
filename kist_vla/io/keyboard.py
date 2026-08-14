@@ -3,8 +3,8 @@
 Subscriber vendored from GR00T-WholeBodyControl
 ``gear_sonic/utils/data_collection/keyboard_subscriber.py``; the publisher is
 ours (used by ``scripts/keyboard_publisher.py``). Decoupling the keyboard
-from the runner keeps the runner headless — it can run under a supervisor
-(the future Orchestrator) with the operator console attached separately.
+from the runner keeps the runner headless — it can run unattended (e.g. as
+a systemd service) with the operator console attached separately.
 """
 
 import zmq

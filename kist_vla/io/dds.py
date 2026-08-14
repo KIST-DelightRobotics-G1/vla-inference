@@ -7,9 +7,10 @@ it and must be kept in sync.
 
 QoS choices mirror the ZMQ semantics this replaces:
 
-- latent actions: BestEffort + KeepLast(1) — "latest value wins", like the
+- latent actions: Reliable + KeepLast(1) — "latest value wins", like the
   CONFLATE PUB/SUB pair. A late-joining or slow reader sees the newest
-  token, never a backlog.
+  token, never a backlog. Reliable (not BestEffort) so the writer matches
+  any reader reliability — see ``latent_action_qos``.
 - commands: Reliable + KeepLast(8) — lifecycle commands must not drop.
 
 ``cyclonedds`` is imported lazily so the package works without it when the

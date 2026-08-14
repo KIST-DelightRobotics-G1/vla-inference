@@ -5,9 +5,11 @@ GR00T N1.7 VLA inference service for the KIST Unitree G1 stack.
 Runs an [Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T) N1.7 policy
 (UNITREE_G1_SONIC embodiment) and streams 64-dim SONIC motion tokens + hand
 joints to [kist-gearsonic-inference](https://github.com/Safety-Node/kist-gearsonic-inference)
-(C++ whole-body controller) over ZMQ. The two services are independent peers;
-a future Orchestrator supervises both (lifecycle, health, mode switching) but
-never sits in the data path.
+(C++ whole-body controller) over ZMQ. The two services are independent peers
+with no central supervisor: coordination rides the messages themselves
+(liveness via DDS Deadline QoS, session lifecycle via the token stream,
+operator commands as plain messages), and process lifecycle is the host's
+job (e.g. systemd).
 
 ## Architecture
 
@@ -61,8 +63,11 @@ DDS notes:
   gearsonic C++ side codegens from it (`idlc -l cxx`); the Python side
   mirrors it in `kist_vla/io/dds.py`; keep the two in sync. The camera type
   mirrors kist-ext-sensor-io's `idl/kist_camera_frames.idl`.
-- QoS mirrors the ZMQ semantics: streams BestEffort+KeepLast ("latest
-  wins"), commands Reliable.
+- QoS: writers are Reliable + KeepLast(1) — "latest wins" like the ZMQ
+  CONFLATE pair, but Reliable so they match both Reliable and BestEffort
+  readers (gearsonic subscribes via unitree's ChannelSubscriber, whose
+  reader QoS we don't control); commands Reliable + KeepLast(8); our own
+  state/camera readers BestEffort + KeepLast(1).
 - State wire semantics were verified against the reference deploy
   (`zmq_output_handler.hpp`): `body_q` = 29 absolute joint angles in Unitree
   motor order; `base_quat` = **pelvis** IMU quaternion (w,x,y,z) from

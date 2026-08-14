@@ -32,10 +32,12 @@ module kist_msgs {
     };
 
     // Control-loop lifecycle command (mirrors the ZMQ "command" topic).
-    // RESERVED for the future Orchestrator — gearsonic has no subscriber
-    // yet: session lifecycle currently rides the data plane (auto-start;
-    // stop publishing -> standing hold; VR e-stop -> damping). Kept in the
-    // contract so the wire shape is settled before the Orchestrator lands.
+    // RESERVED — gearsonic has no subscriber yet: session lifecycle
+    // currently rides the data plane (auto-start; stop publishing ->
+    // standing hold; VR e-stop -> damping). Kept in the contract as the
+    // operator channel over DDS (explicit start/stop and PLANNER/POSE mode
+    // switching from an operator console, what the ZMQ 'k'/'i' keys do
+    // today) so the wire shape is settled before that lands.
     struct WbcCommand {
         unsigned long long seq;
         long long          stamp_ns;
