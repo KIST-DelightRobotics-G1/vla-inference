@@ -1,31 +1,32 @@
 # kist-vla-inference
 
-GR00T N1.7 VLA inference service for the KIST Unitree G1 stack.
-
-Runs an [Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T) N1.7 policy
+GR00T N1.7 VLA inference service for the KIST Unitree G1 stack. Runs an
+[Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T) N1.7 policy
 (UNITREE_G1_SONIC embodiment) and streams 64-dim SONIC motion tokens + hand
-joints to [kist-gearsonic-inference](https://github.com/Safety-Node/kist-gearsonic-inference)
-(C++ whole-body controller) over ZMQ. The two services are independent peers
-with no central supervisor: coordination rides the messages themselves
-(liveness via DDS Deadline QoS, session lifecycle via the token stream,
-operator commands as plain messages), and process lifecycle is the host's
-job (e.g. systemd).
+joints at 50 Hz to
+[kist-gearsonic-inference](https://github.com/Safety-Node/kist-gearsonic-inference)
+(C++ whole-body controller).
+
+**Scope**: inference only — this service consumes a finished checkpoint and
+streams action tokens. Data collection and finetuning happen outside this
+repo. The two services are independent peers with no central supervisor:
+coordination rides the messages themselves (liveness via DDS Deadline QoS,
+session lifecycle via the token stream, operator commands as plain
+messages), and process lifecycle is the host's job (e.g. systemd).
 
 ## Architecture
 
 ```
                  ┌──────────────────────────────────────────────┐
                  │   kist-vla-inference (this repo, Python)      │
- camera server ──►:5555─┐                                        │
-                 │      ▼                                        │
- gearsonic ──────►:5557 Inference worker thread                  │
- (g1_debug state)│      observation → GR00T N1.7 (~0.4s, GPU)    │
-                 │      → chunk: motion_token(40,64)+hands(40,7)²│
+ camera ─────────►      Inference worker thread                  │
+                 │      observation → GR00T N1.7 (~0.4s, GPU)    │
+ robot state ────►      → chunk: motion_token(40,64)+hands(40,7)²│
                  │      ▼  maxsize-1 queue                       │
- keyboard ───────►:5580 Main thread (50 Hz publish loop)         │
+ keyboard ───────►      Main thread (50 Hz publish loop)         │
                  │      latency-compensated chunk playback       │
                  └──────│───────────────────────────────────────-┘
-                        ▼ :5556  latent protocol v4 (PUB)
+                        ▼ latent actions, 50 Hz
                  ┌──────────────────────────────────────────────┐
                  │  kist-gearsonic-inference (C++, 50 Hz RT)     │
                  │  token[64] → PolicyDecoder(TRT) → motors      │
@@ -44,7 +45,7 @@ Single process, two threads:
 Every cross-boundary handoff keeps only the latest value (ZMQ CONFLATE
 sockets, maxsize-1 queues) — consumers see fresh data, never a backlog.
 
-## Transports
+### Transports
 
 The runner core talks to the outside world through the Protocols in
 `kist_vla/io/interfaces.py`; each channel picks its transport independently
@@ -57,12 +58,14 @@ each `zmq` by default):
 | camera | gear_sonic sensor server :5555 | kist-ext-sensor-io `CompressedColorFrame`, H.264 → PyAV decode (`kist_vla/io/dds_camera.py`) |
 | robot state | `g1_debug` re-publisher :5557 | unitree `rt/lowstate` + `rt/dex3/{left,right}/state` directly (`kist_vla/io/dds_state.py`) — no re-publisher process needed |
 
-DDS notes:
+### Wire contract — DDS (real robot)
 
 - **`idl/kist_latent_action.idl` is the shared action contract** — the
   gearsonic C++ side codegens from it (`idlc -l cxx`); the Python side
   mirrors it in `kist_vla/io/dds.py`; keep the two in sync. The camera type
   mirrors kist-ext-sensor-io's `idl/kist_camera_frames.idl`.
+- Topics: `rt/kist/latent_action` (50 Hz stream), `rt/kist/wbc_command`
+  (reserved — operator channel, no subscriber yet).
 - QoS: writers are Reliable + KeepLast(1) — "latest wins" like the ZMQ
   CONFLATE pair, but Reliable so they match both Reliable and BestEffort
   readers (gearsonic subscribes via unitree's ChannelSubscriber, whose
@@ -72,15 +75,13 @@ DDS notes:
   (`zmq_output_handler.hpp`): `body_q` = 29 absolute joint angles in Unitree
   motor order; `base_quat` = **pelvis** IMU quaternion (w,x,y,z) from
   LowState — not the torso IMU on `rt/secondary_imu`.
-- Install: `pip install -e ".[dds]"` plus unitree_sdk2py for the state
-  source (see pyproject comment).
 - Remaining hardware verification: Dex3 hand motor order and IMU quaternion
   convention against the real robot / final data-collection pipeline.
 
-## Interface contract (latent protocol v4, zmq transport)
+### Wire contract — ZMQ (latent protocol v4)
 
-Frozen wire format shared with gearsonic; see `kist_vla/protocol.py` and
-`tests/test_protocol.py` for the byte-level pin.
+Frozen wire format shared with the reference stack; see
+`kist_vla/protocol.py` and `tests/test_protocol.py` for the byte-level pin.
 
 | Direction | Port | Content |
 |---|---|---|
@@ -93,25 +94,94 @@ Frozen wire format shared with gearsonic; see `kist_vla/protocol.py` and
 
 Message layout: `[topic][1280-byte NUL-padded JSON header][little-endian binary fields]`.
 
-## Install
+### Provenance
 
-Python ≥ 3.10 for the package; **3.12** if you use the local (in-process)
-policy backend, because `gr00t` requires it.
+Core loop and utilities are ported from NVIDIA
+[GR00T-WholeBodyControl](https://github.com/NVlabs/GR00T-WholeBodyControl)
+(`gear_sonic/scripts/run_vla_inference.py` and friends, Apache-2.0), with the
+pinocchio robot model replaced by static joint tables
+(`kist_vla/g1_joints.py`, dumped from the reference model — re-dump, don't
+hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
+
+## Dependencies
+
+| Component | Version | Role |
+|---|---|---|
+| Python | 3.12 (package itself runs on ≥ 3.10) | `gr00t` requires 3.12 for the local policy backend |
+| numpy, scipy, pyzmq, msgpack(-numpy), opencv-python-headless, tyro | PyPI | core runtime (installed automatically) |
+| `gr00t` (Isaac-GR00T) | local clone | N1.7 policy — local mode only; remote mode and tests run without it |
+| `cyclonedds`, `av` | PyPI, `[dds]` extra | DDS transports + H.264 camera decode |
+| `unitree_sdk2py` | local clone (`--no-deps`) | unitree DDS IDL types for the state source |
+| N1.7 checkpoint | UNITREE_G1_SONIC finetune | **hard input** — the base `nvidia/GR00T-N1.7-3B` has no SONIC action head; see the [finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl) |
+| `pytest` | `[dev]` extra | tests |
+
+Checkpoint couplings:
+
+- `DEFAULT_INITIAL_MOTION_TOKEN` (`kist_vla/config.py`) is specific to the
+  SONIC checkpoint used in training — must be re-derived if the gearsonic
+  SONIC checkpoint changes.
+- The normalization statistics used to decode actions live inside the N1.7
+  checkpoint's processor and change with every finetune (handled by `gr00t`
+  automatically — nothing to copy here).
+
+## Installation
+
+#### 1. Clone repository
+
+```bash
+git clone https://github.com/Safety-Node/kist-vla-inference.git
+cd kist-vla-inference
+```
+
+#### 2. Create the virtualenv
 
 ```bash
 uv venv --python 3.12 && source .venv/bin/activate
 uv pip install -e ".[dev]"
-uv pip install -e ~/Isaac-GR00T        # local policy mode only
 ```
 
-## Run
+#### 3. DDS transports (real robot)
 
-**Scope**: this service does inference only — it consumes a finished
-checkpoint and streams action tokens. Data collection and finetuning happen
-outside this repo; a UNITREE_G1_SONIC-finetuned checkpoint is a hard input
-(the base `nvidia/GR00T-N1.7-3B` has no SONIC action head — see the
-[finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl)
-for how one is produced).
+```bash
+uv pip install -e ".[dds]"
+# unitree IDL types for the state source (--no-deps: it pins an old
+# cyclonedds and pulls opencv-python; its IDL types work fine with current
+# cyclonedds and opencv-python-headless)
+uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
+```
+
+#### 4. Local policy backend (GPU box only)
+
+`gr00t` is not on PyPI — install from the local clone:
+
+```bash
+uv pip install -e ~/Isaac-GR00T
+```
+
+Skip this on the robot side when using `--policy.mode remote`.
+
+## Build
+
+No build step — pure Python, no codegen (the DDS types in
+`kist_vla/io/dds.py` mirror `idl/kist_latent_action.idl` by hand; keep them
+in sync when the IDL changes). Verify the install with the test suite,
+which runs without a GPU, model, or robot:
+
+```bash
+pytest
+```
+
+This includes the **L1 loopback harness** (`tests/test_loopback.py`): the
+real runner over real ZMQ against fake sensors and a fake policy, verifying
+the 50 Hz stream, latency compensation, frame ordering, prompt changes, and
+control commands. DDS tests run when `cyclonedds` is installed and are
+skipped otherwise.
+
+## Usage
+
+**Tokens drive the robot** — with a live gearsonic on the DDS domain, a
+fresh token stream switches it to external-token mode and the robot moves.
+Clear the area and keep the e-stop (VR controller) in reach.
 
 ```bash
 # Single process (model in-process, default)
@@ -125,39 +195,30 @@ python scripts/run_vla.py --policy.mode remote --policy.host <gpu-box>      # ro
 python scripts/keyboard_publisher.py
 ```
 
-Operator keys: `p` pause/resume · `k` start/stop gearsonic loop · `i` initial
-pose · `[` `]` toggle hands · `t` change prompt.
-
 `--help` shows all options (ports, rates, prompt, action bound).
 
-## Tests
+#### Transport selection
 
-All tests run without a GPU, model, or robot:
+Real robot (DDS for all three channels):
 
 ```bash
-pytest
+python scripts/run_vla.py --policy.mode remote --policy.host <gpu-box> \
+    --io.action-transport dds --io.camera-transport dds --io.state-transport dds
 ```
 
-This includes the **L1 loopback harness** (`tests/test_loopback.py`): the
-real runner over real ZMQ against fake sensors and a fake policy, verifying
-the 50 Hz stream, latency compensation, frame ordering, prompt changes, and
-control commands. DDS tests run when `cyclonedds` is installed and are
-skipped otherwise.
+`--io.dds-domain-id` sets the domain (default 0); `--io.dds-camera-topic`
+maps a kist-ext-sensor-io color stream to the `ego_view` observation.
 
-## Provenance
+#### Operator keys
 
-Core loop and utilities are ported from NVIDIA
-[GR00T-WholeBodyControl](https://github.com/NVlabs/GR00T-WholeBodyControl)
-(`gear_sonic/scripts/run_vla_inference.py` and friends, Apache-2.0), with the
-pinocchio robot model replaced by static joint tables
-(`kist_vla/g1_joints.py`, dumped from the reference model — re-dump, don't
-hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
+`p` pause/resume · `k` start/stop gearsonic loop · `i` initial pose ·
+`[` `]` toggle hands · `t` change prompt (`prompt:<text>` on the wire).
 
-Known checkpoint couplings:
+#### Hardware link check (no checkpoint needed)
 
-- `DEFAULT_INITIAL_MOTION_TOKEN` (`kist_vla/config.py`) is specific to the
-  SONIC checkpoint used in training — must be re-derived if the gearsonic
-  SONIC checkpoint changes.
-- The normalization statistics used to decode actions live inside the N1.7
-  checkpoint's processor and change with every finetune (handled by `gr00t`
-  automatically — nothing to copy here).
+Publishes the safe standing token at 50 Hz over DDS — verifies the
+token → decoder → motors path against a live gearsonic without a model:
+
+```bash
+python scripts/publish_test_tokens.py --duration 15
+```
