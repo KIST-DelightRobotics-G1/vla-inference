@@ -16,9 +16,13 @@ dependencies = [
 ]
 
 # The `local` policy backend additionally requires the `gr00t` package
-# (NVIDIA Isaac-GR00T, Python 3.12 only). It is not on PyPI — install from
-# the local clone:
+# (Isaac-GR00T, Python 3.12 only). It is not on PyPI — install from a local
+# clone checked out at the commit the checkpoint was finetuned with:
+#   git clone https://github.com/foodbanana/Isaac-GR00T.git ~/Isaac-GR00T
+#   git -C ~/Isaac-GR00T checkout 5ac4e6b6ad7467f4ccd441f6d7ec574d4da0a21f
 #   uv pip install -e ~/Isaac-GR00T
+# The commit is a checkpoint coupling, not a preference — see
+# kist_vla/gr00t_version.py (EXPECTED_GR00T_COMMIT) and the README.
 # The `remote` backend and all unit tests run without it.
 
 [project.optional-dependencies]

@@ -109,7 +109,7 @@ hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
 |---|---|---|
 | Python | 3.12 (package itself runs on ≥ 3.10) | `gr00t` requires 3.12 for the local policy backend |
 | numpy, scipy, pyzmq, msgpack(-numpy), opencv-python-headless, tyro | PyPI | core runtime (installed automatically) |
-| `gr00t` (Isaac-GR00T) | local clone | N1.7 policy — local mode only; remote mode and tests run without it |
+| `gr00t` (Isaac-GR00T) | local clone, pinned commit — see below | N1.7 policy — local mode only; remote mode and tests run without it |
 | `cyclonedds`, `av` | PyPI, `[dds]` extra | DDS transports + H.264 camera decode |
 | `unitree_sdk2py` | local clone (`--no-deps`) | unitree DDS IDL types for the state source |
 | N1.7 checkpoint | UNITREE_G1_SONIC finetune | **hard input** — the base `nvidia/GR00T-N1.7-3B` has no SONIC action head; see the [finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl) |
@@ -117,6 +117,17 @@ hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
 
 Checkpoint couplings:
 
+- **The `gr00t` commit is part of the checkpoint contract.** A checkpoint's
+  `config.json` is a *delta* against the code's defaults, not a full spec —
+  keys it omits (`input_embedding_dim`, `state_history_length`,
+  `attend_text_every_n_blocks`, ...) come from
+  `gr00t/configs/model/gr00t_n1d7.py`, so the assembled architecture is
+  `config.json` + that version of the code. A renamed module makes
+  `AutoModel.from_pretrained` (HF-default non-strict) randomly initialize the
+  affected weights behind a warning: the policy loads, runs, and emits
+  garbage motion tokens. The expected commit lives in
+  `EXPECTED_GR00T_COMMIT` (`kist_vla/gr00t_version.py`) and is checked on
+  every `create_policy` call; update it only together with the checkpoint.
 - `DEFAULT_INITIAL_MOTION_TOKEN` (`kist_vla/config.py`) is specific to the
   SONIC checkpoint used in training — must be re-derived if the gearsonic
   SONIC checkpoint changes.
@@ -152,13 +163,29 @@ uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitr
 
 #### 4. Local policy backend (GPU box only)
 
-`gr00t` is not on PyPI — install from the local clone:
+`gr00t` is not on PyPI — install from a local clone, checked out at the
+commit the checkpoint was finetuned with
+(`EXPECTED_GR00T_COMMIT` in `kist_vla/gr00t_version.py`):
 
 ```bash
+git clone https://github.com/foodbanana/Isaac-GR00T.git ~/Isaac-GR00T
+# detached on purpose: gr00t is installed editable, so a `git pull` in this
+# clone changes the running model with no reinstall
+git -C ~/Isaac-GR00T checkout 5ac4e6b6ad7467f4ccd441f6d7ec574d4da0a21f
 uv pip install -e ~/Isaac-GR00T
 ```
 
-Skip this on the robot side when using `--policy.mode remote`.
+That commit is a KIST fork of NVIDIA's `9c7e746`; NVIDIA's `main` is **not** a
+superset of it (see `kist_vla/gr00t_version.py`). The install pulls
+torch 2.9.0+cu128 and a prebuilt flash-attn 2.8.3 cp312 wheel from the URL the
+clone's `[tool.uv.sources]` names — no CUDA source build, but Python must be
+3.12.
+
+The VLM backbone (`nvidia/Cosmos-Reason2-2B`) is a **gated** HF repo and is
+fetched from Hugging Face even when `--policy.model-path` is a local
+directory; without a token in `HF_HOME` the policy dies with a 401.
+
+Skip this whole step on the robot side when using `--policy.mode remote`.
 
 ## Build
 

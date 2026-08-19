@@ -13,6 +13,7 @@ moving the GPU to another machine without touching runner code
 from typing import Any, Protocol
 
 from .config import PolicyConfig
+from .gr00t_version import warn_on_gr00t_commit_mismatch
 
 
 class PolicyBackend(Protocol):
@@ -68,6 +69,9 @@ class RemotePolicy:
 
 
 def create_policy(config: PolicyConfig) -> PolicyBackend:
+    # Both modes import gr00t: local for Gr00tPolicy, remote for PolicyClient
+    # (whose socket teardown fix is part of the pinned commit).
+    warn_on_gr00t_commit_mismatch()
     if config.mode == "local":
         return LocalPolicy(config)
     if config.mode == "remote":
