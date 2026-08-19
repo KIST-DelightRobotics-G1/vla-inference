@@ -168,9 +168,18 @@ commit the checkpoint was finetuned with
 (`EXPECTED_GR00T_COMMIT` in `kist_vla/gr00t_version.py`):
 
 ```bash
+bash scripts/install_gr00t.sh
+```
+
+That clones the fork, checks it out **detached** at the pinned commit, and
+installs it. It reads the commit from `kist_vla/gr00t_version.py` so there is
+one authority for it; `GR00T_SRC` and `GR00T_REMOTE` override the location.
+Detached is deliberate — gr00t is installed editable, so leaving the clone on
+a tracking branch means a later `git pull` changes the running model with no
+reinstall. The equivalent by hand:
+
+```bash
 git clone https://github.com/foodbanana/Isaac-GR00T.git ~/Isaac-GR00T
-# detached on purpose: gr00t is installed editable, so a `git pull` in this
-# clone changes the running model with no reinstall
 git -C ~/Isaac-GR00T checkout 5ac4e6b6ad7467f4ccd441f6d7ec574d4da0a21f
 uv pip install -e ~/Isaac-GR00T
 ```
@@ -186,6 +195,21 @@ fetched from Hugging Face even when `--policy.model-path` is a local
 directory; without a token in `HF_HOME` the policy dies with a 401.
 
 Skip this whole step on the robot side when using `--policy.mode remote`.
+
+#### 5. Runtime environment
+
+```bash
+source scripts/env.sh
+```
+
+Sets `HF_HOME`, drops out of conda, and clears `PYTHONPATH` — a globally
+sourced ROS 2 puts Python 3.10 site-packages there, which shadows imports
+inside the 3.12 venv (`pytest` dies on `No module named 'yaml'`). This package
+does not use ROS; the `rt/*` topic names are unitree's DDS naming convention.
+
+`requirements.lock.txt` records the exact third-party set this was verified
+with. It is a record, not the install path — `install_gr00t.sh` reproduces it,
+since gr00t's own pyproject pins nearly everything with `==`.
 
 ## Build
 
