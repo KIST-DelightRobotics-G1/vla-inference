@@ -273,3 +273,41 @@ token → decoder → motors path against a live gearsonic without a model:
 ```bash
 python scripts/publish_test_tokens.py --duration 15
 ```
+
+#### Session replay (no checkpoint needed)
+
+Replays a [kist-data-collector](https://github.com/Safety-Node/kist-data-collector)
+session on the robot: its recorded `motion_token.csv` is a copy of the token
+gearsonic's decoder consumed on each CONTROL tick, so publishing it back on
+`rt/kist/latent_action` at 50 Hz drives the whole body through the same latent
+trajectory — hand targets come from `hand_cmd_{side}.csv`. The decoder stays
+closed-loop on live robot state, so the robot balances itself; this is a latent
+replay, not an open-loop joint playback.
+
+```bash
+# Inspect a session (rates, gaps, arbiter modes) — no DDS, no robot
+python scripts/replay_session.py <session-dir> --dry-run
+
+# Against the gearsonic probe (./build/vla_receiver_probe 42)
+python scripts/replay_session.py <session-dir> --domain 42
+
+# On the real robot — ROBOT MOVES, hang it first
+python scripts/replay_session.py <session-dir> --domain 0
+```
+
+The published stream is bracketed — standing lead-in, crossfade, replay,
+crossfade, standing lead-out — so gearsonic claims VLA from a known pose and
+the episode does not end mid-motion. `motion_token.csv` rows exist only for
+ticks that decoded a token, so `seq`/`stamp_ns` gaps (INIT ramp, damping,
+e-stop) are resampled onto a strict 20 ms grid and blended across; a gap longer
+than `--max-gap-ticks` (0.5 s) is reported and aborts the run unless `--force`
+is given. `--teleop-only` restricts the replay to `arbiter_mode == 1`, the
+segments the training export keeps. The session-loading half lives in
+`kist_vla/replay.py` (pure data handling, no DDS — `tests/test_replay.py`
+pins it against the collector's CSV schemas).
+
+**The recorded tokens are latents of the SONIC checkpoint that was running when
+the session was collected.** Replaying them against a gearsonic built on a
+different SONIC decoder checkpoint produces a different, possibly unsafe motion
+— the two latent spaces are not comparable. Same coupling as
+`DEFAULT_INITIAL_MOTION_TOKEN`.
