@@ -176,6 +176,15 @@ The image bakes in steps 2–3 (venv, all Python deps, CycloneDDS 0.10.2, `unitr
 ./docker/run.sh        # shell in the container; re-attaches if it already exists
 ```
 
+Host prerequisites the image cannot supply: an x86_64 box with an NVIDIA
+driver (verified with 550 on an RTX 3090) and `nvidia-container-toolkit`
+(`docker run --gpus all`); ~20 GB for the image plus network access to
+GitHub, PyPI, the PyTorch cu128 index and Hugging Face during the build;
+and, at run time, the checkpoint under `~/vla_data` and a Hugging Face
+token + cached `nvidia/Cosmos-Reason2-2B` under `~/hf_cache` (request
+access to the gated repo first). gearsonic / ext-sensor-io run as their own
+containers on the same host network and NIC.
+
 `run.sh` wires `--gpus all`, `--network host` (DDS/ZMQ share the host
 network with gearsonic and ext-sensor-io), mounts `~/vla_data` at
 `/vla_data` and `~/hf_cache` at `/hf_cache` (`HF_HOME` — token + the gated
