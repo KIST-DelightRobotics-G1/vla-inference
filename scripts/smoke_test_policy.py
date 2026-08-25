@@ -4,15 +4,14 @@
 The first thing to run against a new checkpoint. It answers, in order, the
 questions a live run answers too late:
 
-1. Is the gr00t clone at the commit this checkpoint was finetuned with?
-2. Did every parameter in the model actually get a weight from the checkpoint?
+1. Did every parameter in the model actually get a weight from the checkpoint?
    ``AutoModel.from_pretrained`` is HF-default non-strict, so a renamed module
    leaves its parameters randomly initialized behind a warning — the policy
    loads, runs, and only the *tokens* are wrong. This is the failure this
    script exists to catch.
-3. Does the checkpoint accept the observation this repo builds, and answer
+2. Does the checkpoint accept the observation this repo builds, and answer
    with the chunk shapes the runner and gearsonic expect?
-4. Is ``|motion_token|`` inside ``action_bound``? The runner drops whole
+3. Is ``|motion_token|`` inside ``action_bound``? The runner drops whole
    chunks above it, which on the robot looks like "the policy stopped".
 
 Usage:
@@ -36,7 +35,6 @@ import numpy as np
 import tyro
 
 from kist_vla.config import RunnerConfig
-from kist_vla.gr00t_version import EXPECTED_GR00T_COMMIT, installed_gr00t_commit
 from kist_vla.observation import ObservationBuilder
 
 
@@ -69,12 +67,6 @@ class Config:
     hold together: latency compensation skips more steps than the horizon has,
     so a finished chunk has nothing left to play."""
 
-    expect_gr00t_commit: str = EXPECTED_GR00T_COMMIT
-    """Commit the checkpoint was finetuned with. Pass "" to skip the check."""
-
-    strict_commit: bool = True
-    """Fail on a gr00t commit mismatch instead of warning."""
-
 
 class Checks:
     """Collects results so one run reports every problem it found."""
@@ -102,23 +94,6 @@ def _preview(keys: list[str], limit: int = 5) -> str:
         return ""
     head = ", ".join(sorted(keys)[:limit])
     return f"{len(keys)} — {head}{', ...' if len(keys) > limit else ''}"
-
-
-def check_gr00t_commit(config: Config, checks: Checks) -> None:
-    print("\n1. gr00t commit")
-    if not config.expect_gr00t_commit:
-        checks.warn("skipped", "--expect-gr00t-commit ''")
-        return
-
-    actual = installed_gr00t_commit()
-    if actual is None:
-        checks.warn("unreadable", "not an editable git checkout — compatibility unverified")
-        return
-    if actual == config.expect_gr00t_commit:
-        checks.ok("matches", actual[:7])
-        return
-    detail = f"installed {actual[:7]}, expected {config.expect_gr00t_commit[:7]}"
-    (checks.fail if config.strict_commit else checks.warn)("mismatch", detail)
 
 
 def checkpoint_weight_names(model_dir: Path) -> set[str] | None:
@@ -150,10 +125,10 @@ def checkpoint_weight_names(model_dir: Path) -> set[str] | None:
 
 
 def load_policy(config: Config, checks: Checks) -> Any:
-    print("\n2. checkpoint load")
+    print("\n1. checkpoint load")
     import torch
 
-    from gr00t.policy.gr00t_policy import Gr00tPolicy
+    from thirdparty.gr00t.policy.gr00t_policy import Gr00tPolicy
 
     checks.check(torch.cuda.is_available(), "CUDA available", f"torch {torch.__version__}")
 
@@ -205,8 +180,9 @@ def load_policy(config: Config, checks: Checks) -> Any:
     )
     if randomly_initialized or unplaced:
         checks.warn(
-            "this is the gr00t version mismatch signature",
-            "see kist_vla/gr00t_version.py",
+            "this is the code/checkpoint version mismatch signature",
+            "the vendored thirdparty/gr00t must match the commit the checkpoint "
+            "was finetuned with — see thirdparty/gr00t/VENDORED_FROM.md",
         )
     return policy
 
@@ -235,7 +211,7 @@ def build_observation(config: Config, runner_config: RunnerConfig) -> dict[str, 
 def check_inference(
     policy: Any, config: Config, runner_config: RunnerConfig, checks: Checks
 ) -> None:
-    print("\n3. inference")
+    print("\n2. inference")
     observation = build_observation(config, runner_config)
     horizon = runner_config.action_horizon
 
@@ -306,7 +282,6 @@ def main(config: Config) -> None:
     print(f"embodiment: {config.embodiment_tag}   prompt: {config.prompt!r}")
 
     checks = Checks()
-    check_gr00t_commit(config, checks)
     policy = load_policy(config, checks)
     check_inference(policy, config, runner_config, checks)
 

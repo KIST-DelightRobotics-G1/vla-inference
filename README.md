@@ -101,15 +101,19 @@ Core loop and utilities are ported from NVIDIA
 (`gear_sonic/scripts/run_vla_inference.py` and friends, Apache-2.0), with the
 pinocchio robot model replaced by static joint tables
 (`kist_vla/g1_joints.py`, dumped from the reference model — re-dump, don't
-hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
+hand-edit). `gear_sonic` is not a dependency. The GR00T N1.7 inference path
+itself is vendored from NVIDIA [Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T)
+into `thirdparty/gr00t/` (Apache-2.0) — see `thirdparty/gr00t/VENDORED_FROM.md`.
 
 ## Dependencies
 
 | Component | Version | Role |
 |---|---|---|
-| Python | 3.12 (package itself runs on ≥ 3.10) | `gr00t` requires 3.12 for the local policy backend |
-| numpy, scipy, pyzmq, msgpack(-numpy), opencv-python-headless, tyro | PyPI | core runtime (installed automatically) |
-| `gr00t` (Isaac-GR00T) | local clone, pinned commit — see below | N1.7 policy — local mode only; remote mode and tests run without it |
+| Python | 3.12 | the pinned torch/flash-attn wheels are cp312 |
+| numpy, scipy, pyzmq, msgpack(-numpy), opencv-python-headless, tyro | PyPI, pinned | core runtime |
+| torch 2.9.0+cu128, torchvision, transformers 4.57.3, diffusers, albumentations, pillow, dm-tree, huggingface-hub | PyPI + cu128 index, pinned | what `thirdparty/gr00t` imports — only the inference path, not gr00t's training/export stack |
+| `thirdparty/gr00t` | vendored, NVIDIA/Isaac-GR00T `9c7e746` | N1.7 policy (20 files); re-vendor with `scripts/vendor_gr00t.sh` |
+| flash-attn 2.8.3 | `[flash]` extra, prebuilt wheel | optional; sdpa fallback without it |
 | `cyclonedds`, `av` | PyPI, `[dds]` extra | DDS transports + H.264 camera decode |
 | `unitree_sdk2py` | local clone (`--no-deps`) | unitree DDS IDL types for the state source |
 | N1.7 checkpoint | UNITREE_G1_SONIC finetune | **hard input** — the base `nvidia/GR00T-N1.7-3B` has no SONIC action head; see the [finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl) |
@@ -117,23 +121,25 @@ hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
 
 Checkpoint couplings:
 
-- **The `gr00t` commit is part of the checkpoint contract.** A checkpoint's
-  `config.json` is a *delta* against the code's defaults, not a full spec —
-  keys it omits (`input_embedding_dim`, `state_history_length`,
+- **The GR00T code version is part of the checkpoint contract.** A
+  checkpoint's `config.json` is a *delta* against the code's defaults, not a
+  full spec — keys it omits (`input_embedding_dim`, `state_history_length`,
   `attend_text_every_n_blocks`, ...) come from
-  `gr00t/configs/model/gr00t_n1d7.py`, so the assembled architecture is
-  `config.json` + that version of the code. A renamed module makes
-  `AutoModel.from_pretrained` (HF-default non-strict) randomly initialize the
-  affected weights behind a warning: the policy loads, runs, and emits
-  garbage motion tokens. The expected commit lives in
-  `EXPECTED_GR00T_COMMIT` (`kist_vla/gr00t_version.py`) and is checked on
-  every `create_policy` call; update it only together with the checkpoint.
+  `thirdparty/gr00t/configs/model/gr00t_n1d7.py`, so the assembled
+  architecture is `config.json` + that version of the code. A renamed module
+  makes `AutoModel.from_pretrained` (HF-default non-strict) randomly
+  initialize the affected weights behind a warning: the policy loads, runs,
+  and emits garbage motion tokens. The vendored files are therefore taken
+  from the Isaac-GR00T commit the checkpoint was finetuned with
+  (`thirdparty/gr00t/VENDORED_FROM.md`); re-vendor only together with the
+  checkpoint, and run `scripts/smoke_test_policy.py` afterwards — its
+  weight-coverage check is what catches this.
 - `DEFAULT_INITIAL_MOTION_TOKEN` (`kist_vla/config.py`) is specific to the
   SONIC checkpoint used in training — must be re-derived if the gearsonic
   SONIC checkpoint changes.
 - The normalization statistics used to decode actions live inside the N1.7
-  checkpoint's processor and change with every finetune (handled by `gr00t`
-  automatically — nothing to copy here).
+  checkpoint's processor and change with every finetune (handled by the
+  processor code automatically — nothing to copy here).
 
 ## Installation
 
@@ -144,12 +150,21 @@ git clone https://github.com/Safety-Node/kist-vla-inference.git
 cd kist-vla-inference
 ```
 
-#### 2. Create the virtualenv
+#### 2. Create the virtualenv and install
 
 ```bash
 uv venv --python 3.12 && source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv pip install --index-strategy unsafe-best-match \
+    --extra-index-url https://download.pytorch.org/whl/cu128 -e ".[dev,flash]"
 ```
+
+This installs everything, including the GR00T inference path — it is vendored
+in `thirdparty/gr00t/`, so there is no separate clone. The cu128 extra index
+supplies the CUDA builds of torch/torchvision; `unsafe-best-match` lets uv
+pick versions across both indexes. Drop `flash` on a machine without a
+matching wheel (the backbone falls back to sdpa attention). On the robot side
+(`--policy.mode remote`) the same install works; torch is only exercised in
+local mode.
 
 #### 3. DDS transports (real robot)
 
@@ -161,40 +176,13 @@ uv pip install -e ".[dds]"
 uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
 ```
 
-#### 4. Local policy backend (GPU box only)
-
-`gr00t` is not on PyPI — install from a local clone, checked out at the
-commit the checkpoint was finetuned with
-(`EXPECTED_GR00T_COMMIT` in `kist_vla/gr00t_version.py`):
-
-```bash
-bash scripts/install_gr00t.sh
-```
-
-That clones the fork, checks it out **detached** at the pinned commit, and
-installs it. It reads the commit from `kist_vla/gr00t_version.py` so there is
-one authority for it; `GR00T_SRC` and `GR00T_REMOTE` override the location.
-Detached is deliberate — gr00t is installed editable, so leaving the clone on
-a tracking branch means a later `git pull` changes the running model with no
-reinstall. The equivalent by hand:
-
-```bash
-git clone https://github.com/foodbanana/Isaac-GR00T.git ~/Isaac-GR00T
-git -C ~/Isaac-GR00T checkout 5ac4e6b6ad7467f4ccd441f6d7ec574d4da0a21f
-uv pip install -e ~/Isaac-GR00T
-```
-
-That commit is a KIST fork of NVIDIA's `9c7e746`; NVIDIA's `main` is **not** a
-superset of it (see `kist_vla/gr00t_version.py`). The install pulls
-torch 2.9.0+cu128 and a prebuilt flash-attn 2.8.3 cp312 wheel from the URL the
-clone's `[tool.uv.sources]` names — no CUDA source build, but Python must be
-3.12.
+#### 4. Hugging Face token (GPU box only)
 
 The VLM backbone (`nvidia/Cosmos-Reason2-2B`) is a **gated** HF repo and is
 fetched from Hugging Face even when `--policy.model-path` is a local
-directory; without a token in `HF_HOME` the policy dies with a 401.
-
-Skip this whole step on the robot side when using `--policy.mode remote`.
+directory; without a token in `HF_HOME` the policy dies with a 401. Request
+access on Hugging Face, then `hf auth login` with `HF_HOME` set as in
+`scripts/env.sh`.
 
 #### 5. Runtime environment
 
@@ -208,8 +196,22 @@ inside the 3.12 venv (`pytest` dies on `No module named 'yaml'`). This package
 does not use ROS; the `rt/*` topic names are unitree's DDS naming convention.
 
 `requirements.lock.txt` records the exact third-party set this was verified
-with. It is a record, not the install path — `install_gr00t.sh` reproduces it,
-since gr00t's own pyproject pins nearly everything with `==`.
+with (`uv pip freeze` of a fresh install). It is a record, not the install
+path — `pyproject.toml` pins the direct dependencies and reproduces it.
+
+#### Updating the vendored GR00T code
+
+Only when a new checkpoint was finetuned with a different Isaac-GR00T commit:
+
+```bash
+bash scripts/vendor_gr00t.sh <nvidia-commit>   # re-copies the 20 files, re-applies patches/
+git diff --stat thirdparty/gr00t               # review what upstream changed
+python scripts/smoke_test_policy.py --model-path <new-checkpoint>
+```
+
+`thirdparty/gr00t/VENDORED_FROM.md` explains which files may be edited
+locally (I/O, validation, logging — add a patch) and which must stay
+byte-identical to training (model, processor, config defaults).
 
 ## Build
 

@@ -6,24 +6,33 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 dependencies = [
-    "numpy",
-    "scipy",
-    "pyzmq",
-    "msgpack",
-    "msgpack-numpy",
-    "opencv-python-headless",
-    "tyro",
+    # ── kist_vla itself ──
+    "numpy==1.26.4",
+    "scipy==1.15.3",
+    "pyzmq==27.0.1",
+    "msgpack==1.1.0",
+    "msgpack-numpy==0.4.8",
+    "opencv-python-headless==4.11.0.86",
+    "tyro==0.9.17",
+    # ── thirdparty/gr00t (the vendored N1.7 inference path) ──
+    # Pinned to the environment the checkpoints were finetuned and verified
+    # in (requirements.lock.txt); torch/transformers/diffusers in particular
+    # must match training. Only what the vendored files import — gr00t's own
+    # pyproject additionally lists deepspeed, wandb, datasets, lmdb,
+    # gymnasium, matplotlib, onnx, tensorrt, peft, accelerate, torchcodec:
+    # training/eval/export tooling the inference path never touches.
+    "torch==2.9.0",
+    "torchvision==0.24.0",
+    "transformers==4.57.3",
+    "diffusers==0.35.1",
+    "albumentations==1.4.18",
+    "pillow==12.3.0",
+    "dm-tree==0.1.10",
+    "huggingface-hub==0.36.2",
 ]
-
-# The `local` policy backend additionally requires the `gr00t` package
-# (Isaac-GR00T, Python 3.12 only). It is not on PyPI — install from a local
-# clone checked out at the commit the checkpoint was finetuned with:
-#   git clone https://github.com/foodbanana/Isaac-GR00T.git ~/Isaac-GR00T
-#   git -C ~/Isaac-GR00T checkout 5ac4e6b6ad7467f4ccd441f6d7ec574d4da0a21f
-#   uv pip install -e ~/Isaac-GR00T
-# The commit is a checkpoint coupling, not a preference — see
-# kist_vla/gr00t_version.py (EXPECTED_GR00T_COMMIT) and the README.
-# The `remote` backend and all unit tests run without it.
+# torch/torchvision are the cu128 builds: install with
+#   uv pip install --index-strategy unsafe-best-match \
+#       --extra-index-url https://download.pytorch.org/whl/cu128 -e .
 
 [project.optional-dependencies]
 dev = ["pytest"]
@@ -32,13 +41,27 @@ dds = ["cyclonedds", "av"]
 #   uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
 # (--no-deps: it pins an old cyclonedds and pulls opencv-python; its IDL
 # types work fine with current cyclonedds and opencv-python-headless.)
+#
+# flash-attn: optional. The checkpoint was trained with it; without it the
+# backbone falls back to sdpa attention (thirdparty/gr00t/model/modules/
+# qwen3_backbone.py). Prebuilt wheel for torch 2.9 / cu12 / cp312:
+flash = [
+    "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl ; python_version == '3.12' and platform_machine == 'x86_64'",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["kist_vla", "kist_vla.io"]
+[tool.setuptools.packages.find]
+include = ["kist_vla*", "thirdparty*"]
+
+[tool.setuptools.package-data]
+"thirdparty.gr00t" = ["LICENSE", "VENDORED_FROM.md", "patches/*.patch"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# Vendored code keeps upstream's style; lint only ours.
+extend-exclude = ["thirdparty"]

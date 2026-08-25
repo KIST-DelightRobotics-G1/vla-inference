@@ -157,7 +157,7 @@ def mean_pairwise_distance(rows: np.ndarray) -> float:
 
 
 def main(config: Config) -> None:
-    from gr00t.policy.gr00t_policy import Gr00tPolicy
+    from thirdparty.gr00t.policy.gr00t_policy import Gr00tPolicy
 
     runner_config = RunnerConfig()
     builder = ObservationBuilder(language_key=runner_config.language_key)

@@ -14,11 +14,6 @@ _KIST_VLA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
 export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 
-# ── Isaac-GR00T clone ────────────────────────────────────────────────────────
-# Where scripts/install_gr00t.sh puts the pinned clone; `gr00t` is imported
-# from here (editable install).
-export GR00T_SRC="${GR00T_SRC:-$HOME/Isaac-GR00T}"
-
 # ── Python path hygiene ──────────────────────────────────────────────────────
 # A globally sourced ROS 2 Humble puts Python 3.10 site-packages on PYTHONPATH,
 # which shadows real imports inside the 3.12 venv. This package does not use
@@ -49,7 +44,6 @@ if [ -f "$HF_HOME/token" ]; then
 else
     echo "HF_HOME=$HF_HOME  (TOKEN MISSING — the gated backbone will 401)"
 fi
-echo "GR00T_SRC=$GR00T_SRC"
 echo "python=$(command -v python3)  $(python3 --version 2>&1)"
 [ -n "${CONDA_PREFIX:-}" ] && echo "warning: conda still active ($CONDA_PREFIX) — deactivate manually"
 
