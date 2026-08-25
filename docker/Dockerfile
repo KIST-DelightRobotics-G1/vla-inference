@@ -32,6 +32,7 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
+    wget \
     nano \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
@@ -93,14 +94,21 @@ RUN git clone --quiet --depth 1 --branch "${UNITREE_SDK2PY_REF}" \
         https://github.com/unitreerobotics/unitree_sdk2_python.git /opt/unitree_sdk2_python && \
     uv pip install --no-deps /opt/unitree_sdk2_python
 
-# ─── source + install + bake-time verification ────────────────────────────────
-# Bake the repo in (build context = repo root minus .venv/.git via
-# .dockerignore). The dep layers above stay cached; only this re-runs on a
-# source change. The import check proves the curated set covers the whole
-# inference graph; the suite runs GPU-less by design.
+# ─── models: GEAR-SONIC encoder ONNX ──────────────────────────────────────────
+# For `--tokens-from joints` (offline joint re-encoding) at its fixed path
+# models/ — same convention as kist-gearsonic-inference, whose decoder this
+# encoder pairs with. Must be swapped together with that decoder checkpoint.
 WORKDIR /workspace/kist-vla-inference
+RUN wget -q -P models \
+    https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx
+
+# ─── source + install + bake-time verification ────────────────────────────────
+# Bake the repo in (build context = repo root minus .venv/.git/models via
+# .dockerignore — the wget layer above provides models/). The dep layers stay
+# cached; only this re-runs on a source change. The import check proves the
+# curated set covers the whole inference graph; the suite runs GPU-less.
 COPY . .
-RUN uv pip install -e ".[dds,parquet,dev]" && \
+RUN uv pip install -e ".[dds,parquet,encode,dev]" && \
     python -c "from gr00t.policy.gr00t_policy import Gr00tPolicy; \
                from gr00t.policy.server_client import PolicyClient; \
                from vla.runner import VLARunner; import replay.cli; \

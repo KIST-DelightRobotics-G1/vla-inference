@@ -293,6 +293,30 @@ python scripts/replay_session.py --session <dataset-dir> --episode 3 --domain 42
 python scripts/replay_session.py --session <dataset-dir>/data/chunk-000/episode_000003.parquet --domain 42
 ```
 
+#### Joint re-encoding (checkpoint-portable replay)
+
+`--tokens-from joints` ignores the recorded tokens and RE-ENCODES the
+episode's recorded whole-body joints through the SONIC encoder at the fixed
+path `models/model_encoder.onnx` (g1 mode — the offline port of gearsonic's
+`token_encoder.cpp` `fill_obs()`, see `src/replay/io/joint_encoder.py`).
+The docker image bakes the encoder in (same convention as gearsonic's
+`models/`); a host checkout fetches it once with
+`wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx`
+and needs `uv pip install -e ".[encode]"`:
+
+```bash
+python scripts/replay_session.py --session <dataset-dir> --episode 1 --domain 42 \
+    --tokens-from joints
+```
+
+This is how a session survives a decoder-checkpoint change: the recorded
+latents don't transfer, but the joints do, through the NEW checkpoint's
+paired encoder (swap `models/model_encoder.onnx` together with gearsonic's
+decoder). `--joint-source state` (measured, default) or `wbc` (commanded).
+Verified against a real episode: re-encoded (g1-mode) vs recorded
+(teleop-mode) tokens agree at median per-tick cosine 0.95 on the same
+checkpoint.
+
 **The recorded tokens are latents of the SONIC checkpoint that was running when
 the session was collected.** Replaying them against a gearsonic built on a
 different SONIC decoder checkpoint produces a different, possibly unsafe motion

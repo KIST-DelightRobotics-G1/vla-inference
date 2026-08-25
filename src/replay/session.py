@@ -112,3 +112,44 @@ def load_episode(
         max_hold_ticks=max_hold_ticks,
         hands_from="cmd",
     )
+
+
+def load_reencoded_episode(
+    path: str | Path,
+    encoder,
+    *,
+    episode_index: int | None = None,
+    joint_source: str = "state",
+    max_hold_ticks: int = 25,
+) -> ReplayTimeline:
+    """Like `load_episode`, but the tokens are RE-ENCODED from the episode's
+    recorded joints (g1 mode) instead of taken from `action.motion_token`.
+
+    Use when the gearsonic-side SONIC decoder checkpoint differs from the
+    one that ran at collection time — the recorded latents don't transfer,
+    but the joints do, through the new checkpoint's paired encoder.
+
+    Args:
+        encoder: `model_encoder.onnx` path, or a callable
+            (N, 1762) -> (N, 64) (see `replay.io.joint_encoder`).
+        joint_source: "state" (measured, default) or "wbc" (commanded).
+        Other args: see `load_episode`.
+    """
+    from .io.joint_encoder import encode_episode_joints
+
+    path = Path(path)
+    if path.is_dir():
+        if episode_index is None:
+            raise ValueError(
+                f"{path} is a dataset directory — pass episode_index to pick an episode"
+            )
+        path = resolve_episode_path(path, episode_index)
+
+    rows, hands = encode_episode_joints(path, encoder, joint_source=joint_source)
+    return build_timeline(
+        rows,
+        left_hand=hands["left"],
+        right_hand=hands["right"],
+        max_hold_ticks=max_hold_ticks,
+        hands_from="cmd",
+    )

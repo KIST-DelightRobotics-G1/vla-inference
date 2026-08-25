@@ -7,3 +7,4 @@ __pycache__
 docker
 requirements.lock.txt
 shared
+models

@@ -34,6 +34,7 @@ unsafe motion — the latent spaces are not comparable.
 
 import sys
 from dataclasses import dataclass
+from typing import Literal
 from pathlib import Path
 
 from common.config import DEFAULT_INITIAL_MOTION_TOKEN
@@ -42,8 +43,12 @@ from common.g1_joints import OPEN_HAND_Q
 
 from .constants import ARBITER_TELEOP, CONTROL_DT_NS
 from .latent_action_publisher import LatentActionPublisher
-from .session import load_episode, load_session
+from .session import load_episode, load_reencoded_episode, load_session
 from .timeline import ActionStream, CompressedGapError, ReplayTimeline, bracket_timeline
+
+# Fixed path, gearsonic-style: the GEAR-SONIC encoder paired with the decoder
+# gearsonic runs (swap them together). The docker image downloads it at build.
+ENCODER_ONNX = "models/model_encoder.onnx"
 
 
 @dataclass
@@ -55,6 +60,16 @@ class Config:
 
     episode: int | None = None
     """Episode index, when --session is a LeRobot dataset root."""
+
+    tokens_from: Literal["recorded", "joints"] = "recorded"
+    """'recorded' publishes the episode's recorded motion tokens (latents of
+    the collection-time SONIC checkpoint). 'joints' RE-ENCODES the recorded
+    whole-body joints through the SONIC encoder at models/model_encoder.onnx
+    (g1 mode) — checkpoint-portable, parquet episodes only."""
+
+    joint_source: Literal["state", "wbc"] = "state"
+    """--tokens-from joints only: 'state' encodes the measured joints (the
+    motion that actually happened), 'wbc' the commanded targets."""
 
     config: str = "config/config.yaml"
     """Network settings (dds: domain_id, network_interface) — gearsonic-style.
@@ -68,7 +83,7 @@ class Config:
     """Replay only arbiter_mode==1 (teleop demonstration) ticks — what the
     training export keeps. Default replays every recorded tick."""
 
-    hand_source: str = "cmd"
+    hand_source: Literal["cmd", "state", "none"] = "cmd"
     """Hand targets: 'cmd' (hand_cmd_{side}.csv, the commanded targets),
     'state' (hand_{side}.csv, measured), or 'none' (open hands)."""
 
@@ -120,10 +135,31 @@ def main(config: Config) -> None:
                 f"a LeRobot episode only carries the commanded teleop hand targets"
             )
         print(f"Episode: {session}" + (f" [{config.episode}]" if config.episode is not None else ""))
-        timeline = load_episode(
-            session, episode_index=config.episode, max_hold_ticks=config.max_gap_ticks
-        )
+        if config.tokens_from == "joints":
+            if not Path(ENCODER_ONNX).exists():
+                raise SystemExit(
+                    f"{ENCODER_ONNX} not found — the docker image bakes it in; on a "
+                    f"host checkout: wget -P models "
+                    f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx"
+                )
+            print(f"Re-encoding joints ({config.joint_source}) via {ENCODER_ONNX}")
+            timeline = load_reencoded_episode(
+                session,
+                ENCODER_ONNX,
+                episode_index=config.episode,
+                joint_source=config.joint_source,
+                max_hold_ticks=config.max_gap_ticks,
+            )
+        else:
+            timeline = load_episode(
+                session, episode_index=config.episode, max_hold_ticks=config.max_gap_ticks
+            )
     else:
+        if config.tokens_from == "joints":
+            raise SystemExit(
+                "--tokens-from joints needs a LeRobot parquet episode (the collector "
+                "CSV sessions carry no aligned whole-body joint stream)"
+            )
         print(f"Session: {session}")
         timeline = load_session(
             session,
