@@ -1,0 +1,18 @@
+# Build context is the repo root (docker/build.sh). Keep the image to source.
+.git
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+# large artifacts never belong in the image — mounted at run time instead
+checkpoints/
+models/
+*.safetensors
+*.onnx
+*.engine
+*.log
+# exploration artifacts kept next to the Dockerfile
+docker/*.json
