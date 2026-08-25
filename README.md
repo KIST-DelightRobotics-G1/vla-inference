@@ -114,8 +114,8 @@ into `thirdparty/gr00t/` (Apache-2.0) — see `thirdparty/gr00t/VENDORED_FROM.md
 | torch 2.9.0+cu128, torchvision, transformers 4.57.3, diffusers, albumentations, pillow, dm-tree, huggingface-hub | PyPI + cu128 index, pinned | what `thirdparty/gr00t` imports — only the inference path, not gr00t's training/export stack |
 | `thirdparty/gr00t` | vendored, NVIDIA/Isaac-GR00T `9c7e746` | N1.7 policy (20 files); re-vendor with `scripts/vendor_gr00t.sh` |
 | flash-attn 2.8.3 | `[flash]` extra, prebuilt wheel | optional; sdpa fallback without it |
-| `cyclonedds` **0.10.2** (C lib + python binding), `av` | `[dds]` extra; C lib via `scripts/install_cyclonedds.sh` | DDS transports + H.264 camera decode. **Not the PyPI default 11.x** — see below |
-| `unitree_sdk2py` | local clone (`--no-deps`) | unitree DDS IDL types for the state source |
+| `cyclonedds` **0.10.2** (C lib + python binding), `av` | `[dds]` extra; C lib built from source (step 3) | DDS transports + H.264 camera decode. **Not the PyPI default 11.x** — see below |
+| `unitree_sdk2py` | upstream clone pinned to `65691c8` (`--no-deps`) | unitree DDS IDL types for the state source |
 | N1.7 checkpoint | UNITREE_G1_SONIC finetune | **hard input** — the base `nvidia/GR00T-N1.7-3B` has no SONIC action head; see the [finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl) |
 | `pytest` | `[dev]` extra | tests |
 
@@ -168,7 +168,7 @@ local mode.
 
 #### Quick start with Docker
 
-The image bakes in steps 2–3 (venv, all Python deps, CycloneDDS 0.10.2, `unitree_sdk2py`) on
+The image bakes in steps 2–3 (venv, all Python deps, CycloneDDS, `unitree_sdk2py`) on
 `nvcr.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04`:
 
 ```bash
@@ -201,17 +201,28 @@ XTypes discovery format differs: the moment a 0.11 Python *reader* joins the
 domain, every 0.10.2 C++ participant segfaults (`ddsi_xt_type_init_impl`) —
 one `run_vla.py` with DDS state/camera kills gearsonic and ext-sensor-io at
 once (reproduced 2026-08-19; a 0.11 *writer* alone works, so the token-publish
-link check does not reveal it). 0.10.2 has no cp312 wheel, so it is built
-against a local C library:
+link check does not reveal it). 0.10.2 has no cp312 wheel, so `pip` compiles
+the binding against a C library you build first — same recipe as the
+gearsonic README:
 
 ```bash
-sudo apt install -y cmake build-essential python3.12-dev   # headers for the binding
-bash scripts/install_cyclonedds.sh      # C lib -> /opt/cyclonedds (sudo), then cyclonedds==0.10.2 into the venv
-uv pip install -e ".[dds]"              # av (cyclonedds already satisfied)
-# unitree IDL types for the state source (--no-deps: it pins an old
-# cyclonedds and pulls opencv-python; its IDL types work fine with current
-# cyclonedds and opencv-python-headless)
-uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
+sudo apt install -y cmake build-essential python3.12-dev     # python3.12-dev: headers for the binding
+git clone --depth 1 -b 0.10.2 https://github.com/eclipse-cyclonedds/cyclonedds.git /tmp/cyclonedds
+cmake -S /tmp/cyclonedds -B /tmp/cyclonedds/build -DCMAKE_INSTALL_PREFIX=/opt/cyclonedds -DCMAKE_BUILD_TYPE=Release
+sudo cmake --build /tmp/cyclonedds/build --target install -j"$(nproc)"
+
+CYCLONEDDS_HOME=/opt/cyclonedds uv pip install -e ".[dds]"   # compiles cyclonedds==0.10.2 (pyproject pin) + av
+```
+
+The version is written once, in `pyproject.toml`'s `[dds]` extra; the lock
+and the Dockerfile read it from there. `unitree_sdk2py` (DDS IDL types for
+the state source) is not on PyPI — clone upstream at the pinned commit:
+
+```bash
+git clone https://github.com/unitreerobotics/unitree_sdk2_python.git ~/unitree_sdk2_python
+git -C ~/unitree_sdk2_python checkout 65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5
+# --no-deps: it pulls opencv-python (we use -headless); its cyclonedds==0.10.2 pin is what you just built
+uv pip install --no-deps -e ~/unitree_sdk2_python
 ```
 
 #### 4. Hugging Face token (GPU box only)

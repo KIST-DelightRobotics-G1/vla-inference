@@ -12,8 +12,8 @@
 #
 # What is NOT here any more, and why:
 #   - git clone Isaac-GR00T / GR00T_SRC   → the inference path is vendored in thirdparty/gr00t
-#   (CycloneDDS 0.10.2 is still built from source — see step 3. The PyPI
-#    `cyclonedds` wheel is 11.x and its readers crash the 0.10.2 C++ stack.)
+#   (CycloneDDS is still built from source — see step 3. The PyPI `cyclonedds`
+#    wheel is 11.x and its readers crash the 0.10.2 C++ stack.)
 #   - apt ffmpeg                          → torchcodec is gone; `av` bundles its own FFmpeg
 FROM nvcr.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 
@@ -23,8 +23,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # ── 1. system packages ────────────────────────────────────────────────────────
-# git: checkouts below. cmake/build-essential: CycloneDDS C library and the
-# cyclonedds python extension (no cp312 wheel for 0.10.2). No python3 from apt —
+# git: checkouts below. cmake/build-essential: CycloneDDS C library (step 3)
+# and the cyclonedds python extension (step 4; no cp312 wheel for 0.10.x). No python3 from apt —
 # uv brings 3.12 with headers.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates curl cmake build-essential \
@@ -48,44 +48,49 @@ ENV UV_LINK_MODE=copy \
     PATH=/opt/venv/bin:$PATH
 RUN uv venv --python 3.12 "$VIRTUAL_ENV"
 
-# ── 3. CycloneDDS 0.10.2 — C library + python binding ─────────────────────────
+# ── 3. CycloneDDS C library ───────────────────────────────────────────────────
 # MUST stay 0.10.x: gearsonic / ext-sensor-io are 0.10.2 and a 0.11 python
 # reader on the domain segfaults them (XTypes discovery format). PyPI's default
-# is 11.x and has no cp312 wheel for 0.10.2, so build both here — same script
-# the host uses. CYCLONEDDS_HOME is where `pip install cyclonedds==0.10.2`
-# (pulled in by the lock below) finds libddsc to link against.
+# is 11.x and 0.10.x has no cp312 wheel, so the python binding is compiled from
+# source in step 4 — against this library, found via CYCLONEDDS_HOME.
+#
+# The version is read from the lock so the C library can never diverge from
+# the binding step 4 builds: bump `cyclonedds==` in pyproject, regenerate the
+# lock, rebuild — nothing here to edit. Same recipe as gearsonic's README.
 ENV CYCLONEDDS_HOME=/opt/cyclonedds \
     LD_LIBRARY_PATH=/opt/cyclonedds/lib:${LD_LIBRARY_PATH}
-COPY scripts/install_cyclonedds.sh /tmp/install_cyclonedds.sh
-RUN --mount=type=cache,target=/root/.cache/uv \
-    PREFIX=$CYCLONEDDS_HOME SUDO= PYTHON=/opt/venv/bin/python bash /tmp/install_cyclonedds.sh \
-    && rm /tmp/install_cyclonedds.sh
+WORKDIR /workspace
+COPY requirements.lock.txt .
+RUN V="$(grep -oP '^cyclonedds==\K.*' requirements.lock.txt)" && test -n "$V" \
+    && git clone -q --depth 1 -b "$V" https://github.com/eclipse-cyclonedds/cyclonedds.git /tmp/cdds \
+    && cmake -S /tmp/cdds -B /tmp/cdds/build -DCMAKE_INSTALL_PREFIX="$CYCLONEDDS_HOME" \
+             -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF \
+             -DENABLE_SSL=OFF -DENABLE_SECURITY=OFF >/dev/null \
+    && cmake --build /tmp/cdds/build --parallel "$(nproc)" >/dev/null \
+    && cmake --install /tmp/cdds/build >/dev/null \
+    && rm -rf /tmp/cdds
 
 # ── 4. third-party Python deps (cached layer — changes only with the lock) ────
 # requirements.lock.txt is the exact set verified against checkpoint-18000
 # (torch/torchvision cu128 wheels via its --extra-index-url line; flash-attn
-# from its wheel URL; cyclonedds==0.10.2 already satisfied by step 3; av).
-WORKDIR /workspace
-COPY requirements.lock.txt .
+# from its wheel URL; cyclonedds compiled here against step 3; av).
 # The uv download cache lives in a BuildKit cache mount, not in the layer:
 # without this the image carried an 8 GB duplicate of every wheel.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --index-strategy unsafe-best-match -r requirements.lock.txt
 
 # ── 5. unitree_sdk2py (DDS IDL types for the state source) ────────────────────
-# Same source the host uses: the copy bundled in GR00T-WholeBodyControl, pinned.
+# Upstream, pinned. (GR00T-WholeBodyControl bundles an older snapshot whose
+# ChannelFactoryInitialize is not idempotent — a second call fails with
+# "create domain error" — while upstream added a thread-safe singleton guard.
+# The LowState_/HandState_ wire types we read are identical in both.)
 # --no-deps: it pulls opencv-python (we have -headless); its cyclonedds==0.10.2
-# pin is exactly what step 3 installed.
-# Editable, so the checkout must stay in the image (/opt).
-ARG WBC_COMMIT=0a87181c9106d0e49293400714b157676e0ec664
+# pin is exactly what step 4 installed. Editable, so the checkout stays in /opt.
+ARG UNITREE_SDK2PY_COMMIT=65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5
 RUN --mount=type=cache,target=/root/.cache/uv \
-    git init -q /opt/GR00T-WholeBodyControl \
-    && git -C /opt/GR00T-WholeBodyControl remote add origin https://github.com/NVlabs/GR00T-WholeBodyControl.git \
-    && git -C /opt/GR00T-WholeBodyControl config core.sparseCheckout true \
-    && echo "external_dependencies/unitree_sdk2_python/" > /opt/GR00T-WholeBodyControl/.git/info/sparse-checkout \
-    && git -C /opt/GR00T-WholeBodyControl fetch -q --depth 1 --filter=blob:none origin "$WBC_COMMIT" \
-    && GIT_LFS_SKIP_SMUDGE=1 git -C /opt/GR00T-WholeBodyControl checkout -q FETCH_HEAD \
-    && uv pip install --no-deps -e /opt/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
+    git clone -q https://github.com/unitreerobotics/unitree_sdk2_python.git /opt/unitree_sdk2_python \
+    && git -C /opt/unitree_sdk2_python checkout -q "$UNITREE_SDK2PY_COMMIT" \
+    && uv pip install --no-deps -e /opt/unitree_sdk2_python
 
 # ── 6. this repository (kist_vla + vendored thirdparty/gr00t) ─────────────────
 COPY . .
@@ -97,8 +102,9 @@ RUN python -c "\
 import torch, cyclonedds, av, unitree_sdk2py.core.channel, \
        thirdparty.gr00t.policy.gr00t_policy, thirdparty.gr00t.policy.server_client, \
        kist_vla.runner, kist_vla.io.dds, kist_vla.io.dds_state, kist_vla.io.dds_camera; \
-import importlib.metadata as m; v = m.version('cyclonedds'); assert v.startswith('0.10.'), v; \
-print('torch', torch.__version__, '| cyclonedds', v, '| av', av.__version__, '| thirdparty.gr00t ok')"
+import importlib.metadata as m, os; v = m.version('cyclonedds'); assert v.startswith('0.10.'), v; \
+assert os.path.exists(f'/opt/cyclonedds/lib/libddsc.so.{v}'), f'C library version != binding {v}'; \
+print('torch', torch.__version__, '| cyclonedds', v, '(binding == libddsc)', '| av', av.__version__, '| thirdparty.gr00t ok')"
 
 # ── runtime ───────────────────────────────────────────────────────────────────
 # The VLM backbone nvidia/Cosmos-Reason2-2B is a gated HF repo: mount a cache
