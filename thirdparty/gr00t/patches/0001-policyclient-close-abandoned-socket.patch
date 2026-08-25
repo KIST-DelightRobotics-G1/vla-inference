@@ -1,0 +1,28 @@
+diff --git a/policy/server_client.py b/policy/server_client.py
+index 6126014..300678c 100644
+--- a/policy/server_client.py
++++ b/policy/server_client.py
+@@ -297,7 +297,22 @@ class PolicyClient(BasePolicy):
+         self._init_socket()
+ 
+     def _init_socket(self):
+-        """Initialize or reinitialize the socket with current settings"""
++        """Initialize or reinitialize the socket with current settings.
++
++        KIST: discard the previous socket with ``linger=0`` first. Every
++        timeout path recreates the socket, and an abandoned REQ socket keeps
++        the default infinite linger — any request it never delivered then
++        blocks ``context.term()`` forever, so a client that merely failed to
++        reach a dead PolicyServer could not exit, not even on Ctrl+C. On the
++        robot that leaves the runner frozen in its last pose.
++        """
++        old_socket = getattr(self, "socket", None)
++        if old_socket is not None:
++            try:
++                old_socket.close(linger=0)
++            except Exception:
++                pass
++
+         self.socket = self.context.socket(zmq.REQ)
+         self.socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
+         self.socket.setsockopt(zmq.SNDTIMEO, self.timeout_ms)
