@@ -99,7 +99,7 @@ def warn_on_gr00t_commit_mismatch(expected: str = EXPECTED_GR00T_COMMIT) -> None
         "!! The checkpoint may load with randomly initialized layers behind a\n"
         "!! warning and emit garbage motion tokens. Either check the clone out\n"
         "!! at the expected commit, or update EXPECTED_GR00T_COMMIT in\n"
-        "!! kist_vla/gr00t_version.py to the commit this checkpoint was\n"
+        "!! src/vla/gr00t_version.py to the commit this checkpoint was\n"
         "!! finetuned with.\n",
         flush=True,
     )

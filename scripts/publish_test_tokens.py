@@ -13,7 +13,7 @@ Usage:
     python scripts/publish_test_tokens.py --domain 0 --duration 10
 
 WARNING: the standing-pose token is specific to the SONIC checkpoint used in
-training (see kist_vla/config.py). With a different SONIC checkpoint on the
+training (see src/common/config.py). With a different SONIC checkpoint on the
 gearsonic side it produces a different, possibly unsafe pose.
 """
 
@@ -23,9 +23,9 @@ from dataclasses import dataclass
 import numpy as np
 import tyro
 
-from kist_vla.config import DEFAULT_INITIAL_MOTION_TOKEN
-from kist_vla.g1_joints import OPEN_HAND_Q
-from kist_vla.io.dds import DdsActionSink
+from common.config import DEFAULT_INITIAL_MOTION_TOKEN
+from common.g1_joints import OPEN_HAND_Q
+from common.io.dds import DdsActionSink
 
 
 @dataclass

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from kist_vla.chunking import (
+from vla.chunking import (
     ActionChunkPlayer,
     calculate_latency_compensated_index,
     should_trigger_new_inference,

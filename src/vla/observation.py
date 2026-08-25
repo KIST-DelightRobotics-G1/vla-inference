@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from .g1_joints import apply_hand_hardware_coupling, assemble_full_q, split_state
+from common.g1_joints import apply_hand_hardware_coupling, assemble_full_q, split_state
 from .transforms import compute_projected_gravity
 
 

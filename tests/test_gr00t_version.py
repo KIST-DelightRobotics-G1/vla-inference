@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from kist_vla.gr00t_version import (
+from vla.gr00t_version import (
     EXPECTED_GR00T_COMMIT,
     installed_gr00t_commit,
     warn_on_gr00t_commit_mismatch,

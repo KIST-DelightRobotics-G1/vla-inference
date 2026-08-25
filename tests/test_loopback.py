@@ -22,10 +22,10 @@ import numpy as np
 import pytest
 import zmq
 
-from kist_vla.config import IOConfig, RunnerConfig
-from kist_vla.io.keyboard import KeyboardPublisher
-from kist_vla.protocol import unpack_message
-from kist_vla.runner import VLARunner
+from common.config import IOConfig, RunnerConfig
+from common.io.keyboard import KeyboardPublisher
+from common.protocol import unpack_message
+from vla.runner import VLARunner
 
 HORIZON = 40
 INFERENCE_SLEEP = 0.15  # fake model latency (s)

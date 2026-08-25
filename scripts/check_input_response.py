@@ -35,8 +35,8 @@ from typing import Any
 import numpy as np
 import tyro
 
-from kist_vla.config import RunnerConfig
-from kist_vla.observation import ObservationBuilder
+from common.config import RunnerConfig
+from vla.observation import ObservationBuilder
 
 
 @dataclass

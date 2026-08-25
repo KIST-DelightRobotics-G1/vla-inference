@@ -8,7 +8,7 @@ regression here fails fast instead of inside the policy server.
 import numpy as np
 import pytest
 
-from kist_vla.observation import ObservationBuilder
+from vla.observation import ObservationBuilder
 
 
 def _camera_msg(with_wrists=False):

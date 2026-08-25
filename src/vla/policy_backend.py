@@ -12,7 +12,7 @@ moving the GPU to another machine without touching runner code
 
 from typing import Any, Protocol
 
-from .config import PolicyConfig
+from common.config import PolicyConfig
 from .gr00t_version import warn_on_gr00t_commit_mismatch
 
 

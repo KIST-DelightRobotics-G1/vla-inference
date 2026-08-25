@@ -12,7 +12,7 @@ import tty
 
 import tyro
 
-from kist_vla.io.keyboard import DEFAULT_KEYBOARD_PORT, KeyboardPublisher
+from common.io.keyboard import DEFAULT_KEYBOARD_PORT, KeyboardPublisher
 
 
 def read_single_key() -> str:

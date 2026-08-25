@@ -2,7 +2,6 @@
 
 Runs an Isaac-GR00T N1.7 policy (UNITREE_G1_SONIC embodiment) and streams
 64-dim SONIC motion tokens + hand joints to the kist-gearsonic-inference
-C++ whole-body controller over ZMQ (latent protocol v4).
+C++ whole-body controller (50 Hz publish loop in `runner`, policy backends
+in `policy_backend`).
 """
-
-__version__ = "0.1.0"

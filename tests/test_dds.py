@@ -16,7 +16,7 @@ from cyclonedds.domain import DomainParticipant  # noqa: E402
 from cyclonedds.sub import DataReader  # noqa: E402
 from cyclonedds.topic import Topic  # noqa: E402
 
-from kist_vla.io.dds import (  # noqa: E402
+from common.io.dds import (  # noqa: E402
     LATENT_ACTION_TOPIC,
     WBC_COMMAND_TOPIC,
     DdsActionSink,

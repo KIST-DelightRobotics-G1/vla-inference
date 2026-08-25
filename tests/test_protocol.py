@@ -10,7 +10,7 @@ import json
 import numpy as np
 import pytest
 
-from kist_vla.protocol import (
+from common.protocol import (
     HEADER_SIZE,
     build_command_message,
     pack_latent_action_message,

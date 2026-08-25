@@ -35,9 +35,9 @@ from typing import Any
 import numpy as np
 import tyro
 
-from kist_vla.config import RunnerConfig
-from kist_vla.gr00t_version import EXPECTED_GR00T_COMMIT, installed_gr00t_commit
-from kist_vla.observation import ObservationBuilder
+from common.config import RunnerConfig
+from vla.gr00t_version import EXPECTED_GR00T_COMMIT, installed_gr00t_commit
+from vla.observation import ObservationBuilder
 
 
 @dataclass
@@ -206,7 +206,7 @@ def load_policy(config: Config, checks: Checks) -> Any:
     if randomly_initialized or unplaced:
         checks.warn(
             "this is the gr00t version mismatch signature",
-            "see kist_vla/gr00t_version.py",
+            "see src/vla/gr00t_version.py",
         )
     return policy
 

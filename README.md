@@ -48,21 +48,21 @@ sockets, maxsize-1 queues) — consumers see fresh data, never a backlog.
 ### Transports
 
 The runner core talks to the outside world through the Protocols in
-`kist_vla/io/interfaces.py`; each channel picks its transport independently
+`src/common/io/interfaces.py`; each channel picks its transport independently
 (`--io.action-transport`, `--io.camera-transport`, `--io.state-transport`,
 each `zmq` by default):
 
 | Channel | `zmq` (reference/sim compatible) | `dds` (real robot) |
 |---|---|---|
-| actions → gearsonic | latent protocol v4 PUB :5556 | `kist_msgs::LatentActionStep` / `WbcCommand` (`kist_vla/io/dds.py`) |
-| camera | gear_sonic sensor server :5555 | kist-ext-sensor-io `CompressedColorFrame`, H.264 → PyAV decode (`kist_vla/io/dds_camera.py`) |
-| robot state | `g1_debug` re-publisher :5557 | unitree `rt/lowstate` + `rt/dex3/{left,right}/state` directly (`kist_vla/io/dds_state.py`) — no re-publisher process needed |
+| actions → gearsonic | latent protocol v4 PUB :5556 | `kist_msgs::LatentActionStep` / `WbcCommand` (`src/common/io/dds.py`) |
+| camera | gear_sonic sensor server :5555 | kist-ext-sensor-io `CompressedColorFrame`, H.264 → PyAV decode (`src/common/io/dds_camera.py`) |
+| robot state | `g1_debug` re-publisher :5557 | unitree `rt/lowstate` + `rt/dex3/{left,right}/state` directly (`src/common/io/dds_state.py`) — no re-publisher process needed |
 
 ### Wire contract — DDS (real robot)
 
 - **`idl/kist_latent_action.idl` is the shared action contract** — the
   gearsonic C++ side codegens from it (`idlc -l cxx`); the Python side
-  mirrors it in `kist_vla/io/dds.py`; keep the two in sync. The camera type
+  mirrors it in `src/common/io/dds.py`; keep the two in sync. The camera type
   mirrors kist-ext-sensor-io's `idl/kist_camera_frames.idl`.
 - Topics: `rt/kist/latent_action` (50 Hz stream), `rt/kist/wbc_command`
   (reserved — operator channel, no subscriber yet).
@@ -81,7 +81,7 @@ each `zmq` by default):
 ### Wire contract — ZMQ (latent protocol v4)
 
 Frozen wire format shared with the reference stack; see
-`kist_vla/protocol.py` and `tests/test_protocol.py` for the byte-level pin.
+`src/common/protocol.py` and `tests/test_protocol.py` for the byte-level pin.
 
 | Direction | Port | Content |
 |---|---|---|
@@ -100,7 +100,7 @@ Core loop and utilities are ported from NVIDIA
 [GR00T-WholeBodyControl](https://github.com/NVlabs/GR00T-WholeBodyControl)
 (`gear_sonic/scripts/run_vla_inference.py` and friends, Apache-2.0), with the
 pinocchio robot model replaced by static joint tables
-(`kist_vla/g1_joints.py`, dumped from the reference model — re-dump, don't
+(`src/common/g1_joints.py`, dumped from the reference model — re-dump, don't
 hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
 
 ## Dependencies
@@ -126,9 +126,9 @@ Checkpoint couplings:
   `AutoModel.from_pretrained` (HF-default non-strict) randomly initialize the
   affected weights behind a warning: the policy loads, runs, and emits
   garbage motion tokens. The expected commit lives in
-  `EXPECTED_GR00T_COMMIT` (`kist_vla/gr00t_version.py`) and is checked on
+  `EXPECTED_GR00T_COMMIT` (`src/vla/gr00t_version.py`) and is checked on
   every `create_policy` call; update it only together with the checkpoint.
-- `DEFAULT_INITIAL_MOTION_TOKEN` (`kist_vla/config.py`) is specific to the
+- `DEFAULT_INITIAL_MOTION_TOKEN` (`src/common/config.py`) is specific to the
   SONIC checkpoint used in training — must be re-derived if the gearsonic
   SONIC checkpoint changes.
 - The normalization statistics used to decode actions live inside the N1.7
@@ -165,14 +165,14 @@ uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitr
 
 `gr00t` is not on PyPI — install from a local clone, checked out at the
 commit the checkpoint was finetuned with
-(`EXPECTED_GR00T_COMMIT` in `kist_vla/gr00t_version.py`):
+(`EXPECTED_GR00T_COMMIT` in `src/vla/gr00t_version.py`):
 
 ```bash
 bash scripts/install_gr00t.sh
 ```
 
 That clones the fork, checks it out **detached** at the pinned commit, and
-installs it. It reads the commit from `kist_vla/gr00t_version.py` so there is
+installs it. It reads the commit from `src/vla/gr00t_version.py` so there is
 one authority for it; `GR00T_SRC` and `GR00T_REMOTE` override the location.
 Detached is deliberate — gr00t is installed editable, so leaving the clone on
 a tracking branch means a later `git pull` changes the running model with no
@@ -185,7 +185,7 @@ uv pip install -e ~/Isaac-GR00T
 ```
 
 That commit is a KIST fork of NVIDIA's `9c7e746`; NVIDIA's `main` is **not** a
-superset of it (see `kist_vla/gr00t_version.py`). The install pulls
+superset of it (see `src/vla/gr00t_version.py`). The install pulls
 torch 2.9.0+cu128 and a prebuilt flash-attn 2.8.3 cp312 wheel from the URL the
 clone's `[tool.uv.sources]` names — no CUDA source build, but Python must be
 3.12.
@@ -214,7 +214,7 @@ since gr00t's own pyproject pins nearly everything with `==`.
 ## Build
 
 No build step — pure Python, no codegen (the DDS types in
-`kist_vla/io/dds.py` mirror `idl/kist_latent_action.idl` by hand; keep them
+`src/common/io/dds.py` mirror `idl/kist_latent_action.idl` by hand; keep them
 in sync when the IDL changes). Verify the install with the test suite,
 which runs without a GPU, model, or robot:
 
@@ -302,9 +302,22 @@ ticks that decoded a token, so `seq`/`stamp_ns` gaps (INIT ramp, damping,
 e-stop) are resampled onto a strict 20 ms grid and blended across; a gap longer
 than `--max-gap-ticks` (0.5 s) is reported and aborts the run unless `--force`
 is given. `--teleop-only` restricts the replay to `arbiter_mode == 1`, the
-segments the training export keeps. The session-loading half lives in
-`kist_vla/replay.py` (pure data handling, no DDS — `tests/test_replay.py`
-pins it against the collector's CSV schemas).
+segments the training export keeps. The implementation is the
+`src/replay/` package (also runnable as `python -m replay`):
+session loading is pure data handling with no DDS — `tests/test_replay.py`
+pins it against the collector's CSV schemas — and only `cli.py` touches the
+wire.
+
+A LeRobot training-export episode replays the same way (needs `pyarrow`,
+`uv pip install -e ".[parquet]"`) — its `action.motion_token` /
+`teleop.*_hand_joints` columns carry the same quantities the collector CSVs
+record:
+
+```bash
+# By dataset root + episode index, or by the parquet file directly:
+python scripts/replay_session.py --session <dataset-dir> --episode 3 --dry-run
+python scripts/replay_session.py --session <dataset-dir>/data/chunk-000/episode_000003.parquet --dry-run
+```
 
 **The recorded tokens are latents of the SONIC checkpoint that was running when
 the session was collected.** Replaying them against a gearsonic built on a

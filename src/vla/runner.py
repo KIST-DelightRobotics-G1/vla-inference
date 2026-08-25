@@ -35,12 +35,12 @@ from typing import Any
 import numpy as np
 
 from .chunking import ActionChunkPlayer, should_trigger_new_inference
-from .config import DEFAULT_INITIAL_MOTION_TOKEN, RunnerConfig
-from .g1_joints import CLOSED_HAND_Q, OPEN_HAND_Q
-from .io import CameraClient, KeyboardSubscriber, StateSubscriber
-from .io.interfaces import ActionSink, CameraSource, OperatorSource, StateSource
-from .io.keyboard import PROMPT_PREFIX
-from .io.zmq_action_sink import ZmqActionSink
+from common.config import DEFAULT_INITIAL_MOTION_TOKEN, RunnerConfig
+from common.g1_joints import CLOSED_HAND_Q, OPEN_HAND_Q
+from common.io import CameraClient, KeyboardSubscriber, StateSubscriber
+from common.io.interfaces import ActionSink, CameraSource, OperatorSource, StateSource
+from common.io.keyboard import PROMPT_PREFIX
+from common.io.zmq_action_sink import ZmqActionSink
 from .observation import ObservationBuilder
 from .policy_backend import PolicyBackend, create_policy
 

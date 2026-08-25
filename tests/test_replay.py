@@ -8,7 +8,7 @@ a schema change on the collector side shows up here.
 import numpy as np
 import pytest
 
-from kist_vla.replay import (
+from replay import (
     ARBITER_TELEOP,
     ARBITER_VLA,
     CONTROL_DT_NS,
@@ -265,27 +265,35 @@ def test_bracket_wraps_the_timeline_in_standing_lead_and_blends(tmp_path):
 
     standing = np.full(64, 5.0, dtype=np.float32)
     open_hand = np.zeros(7, dtype=np.float32)
-    tokens, left, right = bracket_timeline(
+    stream = bracket_timeline(
         timeline, standing, open_hand, lead_in_ticks=3, lead_out_ticks=2, blend_ticks=4
     )
 
-    assert len(tokens) == 3 + 4 + 10 + 4 + 2
-    assert left.shape == (len(tokens), 7) and right.shape == (len(tokens), 7)
+    assert len(stream) == 3 + 4 + 10 + 4 + 2
+    assert stream.left_hand.shape == (len(stream), 7)
+    assert stream.right_hand.shape == (len(stream), 7)
     # lead-in / lead-out hold the standing token exactly
-    assert np.array_equal(tokens[:3], np.tile(standing, (3, 1)))
-    assert np.array_equal(tokens[-2:], np.tile(standing, (2, 1)))
+    assert np.array_equal(stream.tokens[:3], np.tile(standing, (3, 1)))
+    assert np.array_equal(stream.tokens[-2:], np.tile(standing, (2, 1)))
+    # per-tick struct view: frame_index counts the published ticks, and the
+    # step fields are views of the same arrays the wire will carry
+    steps = list(stream)
+    assert [s.frame_index for s in steps[:3]] == [0, 1, 2]
+    assert np.array_equal(steps[0].token_state, standing)
+    assert np.array_equal(steps[-1].left_hand_joints, open_hand)
+    assert stream[-1].frame_index == len(stream) - 1
     # blends land on the timeline's first / last tick
-    assert tokens[3 + 4 - 1][0] == pytest.approx(timeline.tokens[0][0])
-    assert tokens[3 + 4][0] == pytest.approx(timeline.tokens[0][0])
-    assert tokens[-3][0] == pytest.approx(standing[0])
+    assert stream.tokens[3 + 4 - 1][0] == pytest.approx(timeline.tokens[0][0])
+    assert stream.tokens[3 + 4][0] == pytest.approx(timeline.tokens[0][0])
+    assert stream.tokens[-3][0] == pytest.approx(standing[0])
     # the replay body is passed through untouched
-    assert np.array_equal(tokens[7:17], timeline.tokens)
+    assert np.array_equal(stream.tokens[7:17], timeline.tokens)
 
 
 def test_bracket_with_zero_lead_is_just_the_timeline(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=6)
     timeline = load_session(tmp_path, hand_source="none")
-    tokens, _, _ = bracket_timeline(
+    stream = bracket_timeline(
         timeline,
         np.zeros(64, dtype=np.float32),
         np.zeros(7, dtype=np.float32),
@@ -293,7 +301,7 @@ def test_bracket_with_zero_lead_is_just_the_timeline(tmp_path):
         lead_out_ticks=0,
         blend_ticks=0,
     )
-    assert np.array_equal(tokens, timeline.tokens)
+    assert np.array_equal(stream.tokens, timeline.tokens)
 
 
 def test_bracket_rejects_a_wrong_sized_standing_token(tmp_path):
