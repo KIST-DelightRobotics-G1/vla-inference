@@ -25,7 +25,9 @@ def build_timeline(
     """Resample recorded tokens onto a strict 20 ms grid, gaps blended over.
 
     Args:
-        rows: parsed `motion_token.csv`.
+        rows: parsed `motion_token.csv` (`read_motion_token_csv`) or a
+            LeRobot episode converted to the same shape
+            (`read_episode_parquet`).
         left_hand / right_hand: `(recv_ns, q)` from `read_hand_csv`; None
             falls back to the open-hand pose (zeros, Dex motor order).
         arbiter_modes: keep only these `arbiter_mode` values (None = all).
@@ -35,15 +37,16 @@ def build_timeline(
             to this many ticks (reported via `Gap.compressed`). The fill is a
             blend from the pre-gap token to the post-gap one, so the stream
             never steps discontinuously — but a *compressed* gap ramps across
-            a real pose change in that many ticks, which is why the caller
-            should gate on it.
-        hands_from: provenance label for the report ("cmd" / "state").
+            a real pose change in that many ticks, which is why
+            `bracket_timeline` refuses such a timeline unless forced.
+        hands_from: provenance label carried on the timeline
+            ("cmd" / "state" / "none").
 
     Raises:
         ValueError: no rows survive filtering, or the grid is degenerate.
     """
     if len(rows) == 0:
-        raise ValueError("motion_token.csv has no rows — nothing to replay")
+        raise ValueError("the recording has no rows — nothing to replay")
 
     keep = np.ones(len(rows), dtype=bool)
     if arbiter_modes is not None:

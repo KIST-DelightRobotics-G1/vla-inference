@@ -19,67 +19,42 @@ Layout:
     io/           recording readers (csv_io: collector sessions, parquet_io:
                   LeRobot export episodes — needs pyarrow, the [parquet]
                   extra) and their output struct (MotionTokenRows)
-    timeline.py   resampling onto the strict 20 ms grid, gap blending,
-                  the standing lead-in/out bracket
-    action_stream.py / latent_action_step.py
-                  the publish-side structs: the finished plan, and one tick
-                  of it (the pure-Python twin of the DDS wire struct)
+    timeline/     20 ms grid resampling, gap blending, the safety gate +
+                  standing bracket, and its products (ReplayTimeline,
+                  ActionStream)
+    latent_action_step.py
+                  one publish tick — the pure-Python twin of the DDS wire
+                  struct, yielded by iterating an ActionStream
     session.py    session directory / episode parquet -> ReplayTimeline
     cli.py        the publisher (`scripts/replay_session.py` /
                   `python -m replay`)
 """
 
-from .constants import (
-    ARBITER_NAMES,
-    ARBITER_NORMAL,
-    ARBITER_RECOVERING,
-    ARBITER_TELEOP,
-    ARBITER_VLA,
-    CONTROL_DT_NS,
-    HAND_DIM,
-    TOKEN_DIM,
-)
-from .action_stream import ActionStream
+# Public surface = names external code actually references. Internal types
+# and primitives (MotionTokenRows, ReplayTimeline, ActionStream, Gap, blend,
+# ...) stay importable from their subpackages (replay.io, replay.timeline).
+from .constants import ARBITER_TELEOP, ARBITER_VLA, CONTROL_DT_NS, TOKEN_DIM
 from .io import (
-    MotionTokenRows,
     read_episode_parquet,
     read_hand_csv,
     read_motion_token_csv,
     resolve_episode_path,
 )
-from .latent_action_step import LatentActionStep
 from .session import load_episode, load_session
-from .timeline import (
-    Gap,
-    ReplayTimeline,
-    align_by_recv_ns,
-    blend,
-    bracket_timeline,
-    build_timeline,
-)
+from .timeline import CompressedGapError, bracket_timeline, build_timeline
 
 __all__ = [
-    "ARBITER_NAMES",
-    "ARBITER_NORMAL",
-    "ARBITER_RECOVERING",
     "ARBITER_TELEOP",
     "ARBITER_VLA",
     "CONTROL_DT_NS",
-    "HAND_DIM",
     "TOKEN_DIM",
-    "MotionTokenRows",
     "read_hand_csv",
     "read_motion_token_csv",
     "read_episode_parquet",
     "resolve_episode_path",
     "load_episode",
     "load_session",
-    "ActionStream",
-    "Gap",
-    "LatentActionStep",
-    "ReplayTimeline",
-    "align_by_recv_ns",
-    "blend",
+    "CompressedGapError",
     "bracket_timeline",
     "build_timeline",
 ]

@@ -1,11 +1,38 @@
-"""Wrapping a timeline in the standing lead-in/out bracket."""
+"""Wrapping a timeline in the standing lead-in/out bracket.
+
+This is the only way to obtain an `ActionStream`, so the compressed-gap
+safety gate lives here: a timeline whose gap fill was capped time-compresses
+a real pose change, and turning it into a publishable stream must be an
+explicit choice (`force=True`), never an accident of a caller forgetting a
+check.
+"""
 
 import numpy as np
 
-from ..action_stream import ActionStream
-from ..constants import HAND_DIM, TOKEN_DIM
+from ..constants import CONTROL_DT_NS, HAND_DIM, TOKEN_DIM
+from .action_stream import ActionStream
 from .blending import blend
 from .replay_timeline import ReplayTimeline
+
+
+class CompressedGapError(ValueError):
+    """The timeline has gaps whose fill was capped (`Gap.compressed`).
+
+    Publishing it would ramp a real pose change faster than the recording —
+    possibly faster than the robot can follow. Callers that accept the risk
+    pass `force=True`.
+    """
+
+    def __init__(self, timeline: ReplayTimeline):
+        self.gaps = timeline.compressed_gaps
+        worst = max(self.gaps, key=lambda g: g.ticks)
+        super().__init__(
+            f"{len(self.gaps)} gap(s) were compressed, worst {worst.ticks} ticks "
+            f"({worst.duration_s:.2f}s) after seq {worst.after_seq} filled in "
+            f"{worst.filled_ticks} ticks "
+            f"({worst.filled_ticks * CONTROL_DT_NS / 1e9:.2f}s) — publishing would "
+            f"ramp a real pose change too fast; pass force=True to accept"
+        )
 
 
 def bracket_timeline(
@@ -16,6 +43,7 @@ def bracket_timeline(
     lead_in_ticks: int,
     lead_out_ticks: int,
     blend_ticks: int,
+    force: bool = False,
 ) -> ActionStream:
     """Wrap a timeline in the standing lead-in/out and the two crossfades.
 
@@ -32,7 +60,14 @@ def bracket_timeline(
     its own LOST recovery 500 ms later (blend to standing, planner reseed,
     back to the origin) — safe, but starting from wherever the episode
     happened to stop.
+
+    Raises:
+        CompressedGapError: the timeline has compressed gaps and `force` is
+            False (see the class docstring).
     """
+    if timeline.compressed_gaps and not force:
+        raise CompressedGapError(timeline)
+
     standing = np.asarray(standing_token, dtype=np.float32).reshape(-1)
     open_hand = np.asarray(open_hand, dtype=np.float32).reshape(-1)
     if standing.shape != (TOKEN_DIM,):

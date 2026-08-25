@@ -35,3 +35,9 @@ class ReplayTimeline:
     @property
     def worst_gap(self) -> Gap | None:
         return max(self.gaps, key=lambda g: g.ticks, default=None)
+
+    @property
+    def compressed_gaps(self) -> list[Gap]:
+        """Gaps whose fill was capped — each one time-compresses a real pose
+        change, which is why `bracket_timeline` refuses them by default."""
+        return [g for g in self.gaps if g.compressed]

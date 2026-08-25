@@ -6,9 +6,6 @@ docstring for the stream layout and safety notes). Equivalent to
 `python -m replay`.
 
 Usage:
-    # Inspect a session — no DDS, no robot:
-    python scripts/replay_session.py sessions/20260824_141530 --dry-run
-
     # Link check against the gearsonic probe (./build/vla_receiver_probe 42):
     python scripts/replay_session.py sessions/20260824_141530 --domain 42
 

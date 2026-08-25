@@ -285,14 +285,11 @@ closed-loop on live robot state, so the robot balances itself; this is a latent
 replay, not an open-loop joint playback.
 
 ```bash
-# Inspect a session (rates, gaps, arbiter modes) — no DDS, no robot
-python scripts/replay_session.py <session-dir> --dry-run
-
 # Against the gearsonic probe (./build/vla_receiver_probe 42)
-python scripts/replay_session.py <session-dir> --domain 42
+python scripts/replay_session.py --session <session-dir> --domain 42
 
 # On the real robot — ROBOT MOVES, hang it first
-python scripts/replay_session.py <session-dir> --domain 0
+python scripts/replay_session.py --session <session-dir> --domain 0
 ```
 
 The published stream is bracketed — standing lead-in, crossfade, replay,
@@ -315,8 +312,8 @@ record:
 
 ```bash
 # By dataset root + episode index, or by the parquet file directly:
-python scripts/replay_session.py --session <dataset-dir> --episode 3 --dry-run
-python scripts/replay_session.py --session <dataset-dir>/data/chunk-000/episode_000003.parquet --dry-run
+python scripts/replay_session.py --session <dataset-dir> --episode 3 --domain 42
+python scripts/replay_session.py --session <dataset-dir>/data/chunk-000/episode_000003.parquet --domain 42
 ```
 
 **The recorded tokens are latents of the SONIC checkpoint that was running when

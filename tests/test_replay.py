@@ -12,14 +12,14 @@ from replay import (
     ARBITER_TELEOP,
     ARBITER_VLA,
     CONTROL_DT_NS,
-    align_by_recv_ns,
-    blend,
+    CompressedGapError,
     bracket_timeline,
     build_timeline,
     load_session,
     read_hand_csv,
     read_motion_token_csv,
 )
+from replay.timeline import align_by_recv_ns, blend
 
 T0 = 1_700_000_000_000_000_000  # arbitrary epoch-ns base
 
@@ -288,6 +288,28 @@ def test_bracket_wraps_the_timeline_in_standing_lead_and_blends(tmp_path):
     assert stream.tokens[-3][0] == pytest.approx(standing[0])
     # the replay body is passed through untouched
     assert np.array_equal(stream.tokens[7:17], timeline.tokens)
+
+
+def test_bracket_refuses_compressed_gaps_unless_forced(tmp_path):
+    # A 30-tick hole capped at 5 fill ticks -> compressed gap: the only way
+    # to an ActionStream must be an explicit force, at every call site.
+    write_motion_token_csv(tmp_path / "motion_token.csv", ticks=40, skip=range(5, 35))
+    timeline = load_session(tmp_path, hand_source="none", max_hold_ticks=5)
+    assert timeline.compressed_gaps and timeline.compressed_gaps[0].ticks == 30
+
+    standing = np.zeros(64, dtype=np.float32)
+    open_hand = np.zeros(7, dtype=np.float32)
+    with pytest.raises(CompressedGapError, match="force=True"):
+        bracket_timeline(
+            timeline, standing, open_hand,
+            lead_in_ticks=1, lead_out_ticks=1, blend_ticks=1,
+        )
+
+    stream = bracket_timeline(
+        timeline, standing, open_hand,
+        lead_in_ticks=1, lead_out_ticks=1, blend_ticks=1, force=True,
+    )
+    assert len(stream) == len(timeline) + 1 + 1 + 2
 
 
 def test_bracket_with_zero_lead_is_just_the_timeline(tmp_path):

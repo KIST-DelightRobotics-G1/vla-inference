@@ -11,7 +11,7 @@ The published stream is bracketed for safety:
 
     [lead-in]  safe standing token, so gearsonic claims VLA from a known pose
     [blend]    standing -> the session's first token
-    [replay]   the recorded tokens, gaps blended over (see timeline.py)
+    [replay]   the recorded tokens, gaps blended over (see replay/timeline/)
     [blend]    the session's last token -> standing
     [lead-out] safe standing token, then the publisher stops
 
@@ -20,9 +20,6 @@ run its own LOST recovery 500 ms later (blend to standing, planner reseed,
 back to the origin) — safe, but from wherever the episode happened to stop.
 
 Usage:
-    # Inspect a session — no DDS, no robot:
-    python scripts/replay_session.py sessions/20260824_141530 --dry-run
-
     # Link check against the gearsonic probe (./build/vla_receiver_probe 42):
     python scripts/replay_session.py sessions/20260824_141530 --domain 42
 
@@ -40,15 +37,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-
 from common.config import DEFAULT_INITIAL_MOTION_TOKEN
 from common.g1_joints import OPEN_HAND_Q
 
-from .constants import ARBITER_NAMES, ARBITER_TELEOP, CONTROL_DT_NS
-from .action_stream import ActionStream
+from .constants import ARBITER_TELEOP, CONTROL_DT_NS
 from .session import load_episode, load_session
-from .timeline import ReplayTimeline, bracket_timeline
+from .timeline import ActionStream, CompressedGapError, ReplayTimeline, bracket_timeline
 
 
 @dataclass
@@ -63,9 +57,6 @@ class Config:
 
     domain: int = 0
     """DDS domain id (must match the gearsonic receiver)."""
-
-    dry_run: bool = False
-    """Analyze the session and print the plan without publishing (no DDS)."""
 
     teleop_only: bool = False
     """Replay only arbiter_mode==1 (teleop demonstration) ticks — what the
@@ -96,34 +87,6 @@ class Config:
     """Publish even when a gap had to be compressed."""
 
 
-def _print_report(timeline: ReplayTimeline) -> None:
-    modes = ", ".join(
-        f"{ARBITER_NAMES.get(m, m)}({m})={n}" for m, n in sorted(timeline.arbiter_modes.items())
-    )
-    print(f"  ticks           {len(timeline)} ({timeline.duration_s:.2f}s at 50 Hz)")
-    print(f"  recorded        {timeline.recorded_ticks}")
-    print(f"  gap-filled      {len(timeline) - timeline.recorded_ticks}")
-    print(f"  arbiter modes   {modes}")
-    print(f"  hand targets    {timeline.hands_from}")
-    if timeline.hand_ticks_before_first:
-        print(
-            f"    note: {timeline.hand_ticks_before_first} tick(s) precede the first hand "
-            f"command row — clamped to it"
-        )
-    bound = float(np.abs(timeline.tokens).max())
-    print(f"  |token| max     {bound:.4f}")
-
-    if timeline.gaps:
-        print(f"  gaps            {len(timeline.gaps)}")
-        for gap in sorted(timeline.gaps, key=lambda g: g.ticks, reverse=True)[:10]:
-            note = f" -> COMPRESSED to {gap.filled_ticks}" if gap.compressed else " -> blended"
-            print(f"    after seq {gap.after_seq}: {gap.ticks} ticks ({gap.duration_s:.2f}s){note}")
-        if len(timeline.gaps) > 10:
-            print(f"    ... and {len(timeline.gaps) - 10} more")
-    else:
-        print("  gaps            none (contiguous 50 Hz recording)")
-
-
 def build_stream(timeline: ReplayTimeline, config: Config) -> ActionStream:
     """Bracket the replay with the standing lead-in/out and the two blends."""
     rate = 1e9 / CONTROL_DT_NS
@@ -134,6 +97,7 @@ def build_stream(timeline: ReplayTimeline, config: Config) -> ActionStream:
         lead_in_ticks=round(config.lead_in_s * rate),
         lead_out_ticks=round(config.lead_out_s * rate),
         blend_ticks=round(config.blend_s * rate),
+        force=config.force,
     )
 
 
@@ -199,34 +163,16 @@ def main(config: Config) -> None:
             max_hold_ticks=config.max_gap_ticks,
             hand_source=config.hand_source,
         )
-    _print_report(timeline)
-
-    compressed = [g for g in timeline.gaps if g.compressed]
-    if compressed and not config.force:
-        worst = max(compressed, key=lambda g: g.ticks)
+    try:
+        stream = build_stream(timeline, config)
+    except CompressedGapError as e:
         print(
-            f"\nRefusing to publish: {len(compressed)} gap(s) exceed --max-gap-ticks "
-            f"({config.max_gap_ticks}), worst {worst.ticks} ticks ({worst.duration_s:.2f}s) "
-            f"after seq {worst.after_seq}.\n"
-            f"A compressed gap ramps a real pose change over "
-            f"{config.max_gap_ticks * CONTROL_DT_NS / 1e9:.2f}s, which may be too fast for the "
-            f"robot. Either raise --max-gap-ticks so the transition is spread over the whole "
-            f"gap instead, restrict the replay (--teleop-only), or pass --force if the "
-            f"faster ramp is acceptable."
+            f"\nRefusing to publish: {e}.\n"
+            f"Either raise --max-gap-ticks (now {config.max_gap_ticks}) so the transition "
+            f"is spread over the whole gap instead, restrict the replay (--teleop-only), "
+            f"or pass --force if the faster ramp is acceptable."
         )
         sys.exit(1)
-
-    stream = build_stream(timeline, config)
-    print(
-        f"\nPublish plan: {len(stream)} ticks ({stream.duration_s:.2f}s) "
-        f"= {config.lead_in_s:.1f}s standing + {config.blend_s:.1f}s blend + "
-        f"{timeline.duration_s:.2f}s replay + {config.blend_s:.1f}s blend + "
-        f"{config.lead_out_s:.1f}s standing"
-    )
-
-    if config.dry_run:
-        print("Dry run — nothing published.")
-        return
 
     from common.io.dds import DdsActionSink
 
