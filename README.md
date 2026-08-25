@@ -23,7 +23,7 @@ messages), and process lifecycle is the host's job (e.g. systemd).
                  │      observation → GR00T N1.7 (~0.4s, GPU)    │
  robot state ────►      → chunk: motion_token(40,64)+hands(40,7)²│
                  │      ▼  maxsize-1 queue                       │
- keyboard ───────►      Main thread (50 Hz publish loop)         │
+                 │      Tx thread (50 Hz publish loop)           │
                  │      latency-compensated chunk playback       │
                  └──────│───────────────────────────────────────-┘
                         ▼ latent actions, 50 Hz
@@ -33,41 +33,44 @@ messages), and process lifecycle is the host's job (e.g. systemd).
                  └──────────────────────────────────────────────┘
 ```
 
-Single process, two threads:
+Single process, three threads:
 
-- **Main thread** — 50 Hz loop: consume finished chunks, trigger inference,
-  play the cached chunk back one step per tick, publish each step. Never
-  blocks; while inference runs it keeps playing the previous chunk, and a
-  stale chunk degrades to holding its last token.
+- **Main thread** — lifecycle only: wires the other two and waits.
+- **Tx thread** (owned by the publisher) — 50 Hz loop: consume finished
+  chunks, trigger inference, play the cached chunk back one step per tick,
+  publish each step. Never blocks; while inference runs it keeps playing
+  the previous chunk, and a stale chunk degrades to holding its last token.
 - **Inference worker** — assembles the observation from the latest sensor
   data and runs the policy (~0.4 s per chunk at 2.5 Hz).
 
-Every cross-boundary handoff keeps only the latest value (ZMQ CONFLATE
-sockets, maxsize-1 queues) — consumers see fresh data, never a backlog.
+Every cross-boundary handoff keeps only the latest value (KeepLast(1)
+readers, maxsize-1 queues) — consumers see fresh data, never a backlog.
 
 ### Transports
 
-The runner core talks to the outside world through the Protocols in
-`src/common/io/interfaces.py`; each channel picks its transport independently
-(`--io.action-transport`, `--io.camera-transport`, `--io.state-transport`,
-each `zmq` by default):
+All robot-facing I/O rides CycloneDDS (`src/common/cyclonedds/`); the runner
+core talks to it through the Protocols in `src/common/interfaces.py`, so
+tests inject fakes without touching the loop:
 
-| Channel | `zmq` (reference/sim compatible) | `dds` (real robot) |
-|---|---|---|
-| actions → gearsonic | latent protocol v4 PUB :5556 | `kist_msgs::LatentActionStep` / `WbcCommand` (`src/common/io/dds.py`) |
-| camera | gear_sonic sensor server :5555 | kist-ext-sensor-io `CompressedColorFrame`, H.264 → PyAV decode (`src/common/io/dds_camera.py`) |
-| robot state | `g1_debug` re-publisher :5557 | unitree `rt/lowstate` + `rt/dex3/{left,right}/state` directly (`src/common/io/dds_state.py`) — no re-publisher process needed |
+| Channel | DDS implementation |
+|---|---|
+| actions → gearsonic | `kist_msgs::LatentActionStep` / `WbcCommand` (`src/common/cyclonedds/kist_msgs.py + kist_msgs_writer.py`) |
+| camera | kist-ext-sensor-io `CompressedColorFrame`, H.264 → PyAV decode (`src/vla/camera_source.py`) |
+| robot state | unitree `rt/lowstate` + `rt/dex3/{left,right}/state` directly (`src/vla/state_source.py`) — no re-publisher process needed |
 
-### Wire contract — DDS (real robot)
+The only non-DDS endpoint is the remote policy server (port 5550,
+Isaac-GR00T's own PolicyServer/PolicyClient pair, `--policy.mode remote`).
+
+### Wire contract — DDS
 
 - **`idl/kist_latent_action.idl` is the shared action contract** — the
   gearsonic C++ side codegens from it (`idlc -l cxx`); the Python side
-  mirrors it in `src/common/io/dds.py`; keep the two in sync. The camera type
+  mirrors it in `src/common/cyclonedds/kist_msgs.py`; keep the two in sync. The camera type
   mirrors kist-ext-sensor-io's `idl/kist_camera_frames.idl`.
 - Topics: `rt/kist/latent_action` (50 Hz stream), `rt/kist/wbc_command`
   (reserved — operator channel, no subscriber yet).
-- QoS: writers are Reliable + KeepLast(1) — "latest wins" like the ZMQ
-  CONFLATE pair, but Reliable so they match both Reliable and BestEffort
+- QoS: writers are Reliable + KeepLast(1) — "latest wins", and Reliable so
+  they match both Reliable and BestEffort
   readers (gearsonic subscribes via unitree's ChannelSubscriber, whose
   reader QoS we don't control); commands Reliable + KeepLast(8); our own
   state/camera readers BestEffort + KeepLast(1).
@@ -77,22 +80,6 @@ each `zmq` by default):
   LowState — not the torso IMU on `rt/secondary_imu`.
 - Remaining hardware verification: Dex3 hand motor order and IMU quaternion
   convention against the real robot / final data-collection pipeline.
-
-### Wire contract — ZMQ (latent protocol v4)
-
-Frozen wire format shared with the reference stack; see
-`src/common/protocol.py` and `tests/test_protocol.py` for the byte-level pin.
-
-| Direction | Port | Content |
-|---|---|---|
-| → gearsonic | 5556 (PUB, `pose` topic) | `token_state[1,64]` f32, `frame_index[1]` i64, `left/right_hand_joints[1,7]` f32, 50 Hz |
-| → gearsonic | 5556 (PUB, `command` topic) | control-loop start/stop/planner flags |
-| ← gearsonic | 5557 (SUB, `g1_debug` topic) | msgpack: `body_q[29]`, `left/right_hand_q[7]`, `base_quat[4]` (wxyz) |
-| ← camera server | 5555 (SUB) | msgpack: `{timestamps, images}` (JPEG), key `ego_view` (+ optional wrists) |
-| ← operator | 5580 (SUB) | keystrokes / `prompt:<text>` |
-| ↔ policy server | 5550 (REQ/REP) | remote mode only (Isaac-GR00T PolicyServer) |
-
-Message layout: `[topic][1280-byte NUL-padded JSON header][little-endian binary fields]`.
 
 ### Provenance
 
@@ -108,7 +95,7 @@ hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
 | Component | Version | Role |
 |---|---|---|
 | Python | 3.12 (package itself runs on ≥ 3.10) | `gr00t` requires 3.12 for the local policy backend |
-| numpy, scipy, pyzmq, msgpack(-numpy), opencv-python-headless, tyro | PyPI | core runtime (installed automatically) |
+| numpy, scipy, opencv-python-headless, tyro, pyyaml | PyPI | core runtime (installed automatically) |
 | `gr00t` (Isaac-GR00T) | local clone, pinned commit — see below | N1.7 policy — local mode only; remote mode and tests run without it |
 | `cyclonedds`, `av` | PyPI, `[dds]` extra | DDS transports + H.264 camera decode |
 | `unitree_sdk2py` | local clone (`--no-deps`) | unitree DDS IDL types for the state source |
@@ -214,7 +201,7 @@ since gr00t's own pyproject pins nearly everything with `==`.
 ## Build
 
 No build step — pure Python, no codegen (the DDS types in
-`src/common/io/dds.py` mirror `idl/kist_latent_action.idl` by hand; keep them
+`src/common/cyclonedds/kist_msgs.py` mirror `idl/kist_latent_action.idl` by hand; keep them
 in sync when the IDL changes). Verify the install with the test suite,
 which runs without a GPU, model, or robot:
 
@@ -222,11 +209,8 @@ which runs without a GPU, model, or robot:
 pytest
 ```
 
-This includes the **L1 loopback harness** (`tests/test_loopback.py`): the
-real runner over real ZMQ against fake sensors and a fake policy, verifying
-the 50 Hz stream, latency compensation, frame ordering, prompt changes, and
-control commands. DDS tests run when `cyclonedds` is installed and are
-skipped otherwise.
+DDS tests run when `cyclonedds` is installed and are skipped otherwise;
+parquet-replay tests likewise skip without `pyarrow`.
 
 ## Usage
 
@@ -241,29 +225,18 @@ python scripts/run_vla.py --policy.model-path /path/to/checkpoint-XXXX
 # Or with the model on another machine:
 python scripts/run_policy_server.py --model-path /path/to/checkpoint-XXXX   # GPU box
 python scripts/run_vla.py --policy.mode remote --policy.host <gpu-box>      # robot side
-
-# Operator console (separate terminal)
-python scripts/keyboard_publisher.py
 ```
 
-`--help` shows all options (ports, rates, prompt, action bound).
-
-#### Transport selection
-
-Real robot (DDS for all three channels):
-
-```bash
-python scripts/run_vla.py --policy.mode remote --policy.host <gpu-box> \
-    --io.action-transport dds --io.camera-transport dds --io.state-transport dds
-```
-
+`--help` shows all options (rates, prompt, action bound).
 `--io.dds-domain-id` sets the domain (default 0); `--io.dds-camera-topic`
 maps a kist-ext-sensor-io color stream to the `ego_view` observation.
 
-#### Operator keys
-
-`p` pause/resume · `k` start/stop gearsonic loop · `i` initial pose ·
-`[` `]` toggle hands · `t` change prompt (`prompt:<text>` on the wire).
+Without an operator source the loop starts unpaused and the session
+lifecycle rides the data plane: publishing fresh tokens claims gearsonic,
+going stale releases it. (The runner still accepts an injected
+OperatorSource — `p` pause · `k` loop start/stop · `i` initial pose ·
+`[` `]` hands · `prompt:<text>` — the operator channel over DDS is the
+reserved `WbcCommand` topic.)
 
 #### Hardware link check (no checkpoint needed)
 
@@ -291,6 +264,10 @@ python scripts/replay_session.py --session <session-dir> --domain 42
 # On the real robot — ROBOT MOVES, hang it first
 python scripts/replay_session.py --session <session-dir> --domain 0
 ```
+
+DDS network settings live in `config/config.yaml` (gearsonic-style:
+`dds.domain_id` + `dds.network_interface`, the latter applied via
+`CYCLONEDDS_URI`); `--domain` overrides the file's domain id.
 
 The published stream is bracketed — standing lead-in, crossfade, replay,
 crossfade, standing lead-out — so gearsonic claims VLA from a known pose and

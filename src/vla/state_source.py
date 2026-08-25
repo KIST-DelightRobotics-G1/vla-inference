@@ -18,8 +18,8 @@ Wire semantics verified against the reference stack
 
 Readers are BestEffort + KeepLast(1) — compatible with any writer
 reliability, latest value wins. ``get_msg`` returns a combined dict only
-when a fresh LowState sample has arrived since the last call (matching the
-ZMQ subscriber's "None until new data" contract); hand states use the
+when a fresh LowState sample has arrived since the last call (the StateSource
+"None until new data" contract); hand states use the
 latest cached sample since they publish on independent clocks.
 """
 

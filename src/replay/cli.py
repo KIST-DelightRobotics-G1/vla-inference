@@ -33,14 +33,15 @@ unsafe motion — the latent spaces are not comparable.
 """
 
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from common.config import DEFAULT_INITIAL_MOTION_TOKEN
+from common.cyclonedds.config import load_dds_config
 from common.g1_joints import OPEN_HAND_Q
 
 from .constants import ARBITER_TELEOP, CONTROL_DT_NS
+from .latent_action_publisher import LatentActionPublisher
 from .session import load_episode, load_session
 from .timeline import ActionStream, CompressedGapError, ReplayTimeline, bracket_timeline
 
@@ -55,8 +56,13 @@ class Config:
     episode: int | None = None
     """Episode index, when --session is a LeRobot dataset root."""
 
-    domain: int = 0
-    """DDS domain id (must match the gearsonic receiver)."""
+    config: str = "config/config.yaml"
+    """Network settings (dds: domain_id, network_interface) — gearsonic-style.
+    A missing file at this default path falls back to built-in defaults."""
+
+    domain: int | None = None
+    """DDS domain id override (must match the gearsonic receiver). Default:
+    the config file's dds.domain_id."""
 
     teleop_only: bool = False
     """Replay only arbiter_mode==1 (teleop demonstration) ticks — what the
@@ -101,44 +107,6 @@ def build_stream(timeline: ReplayTimeline, config: Config) -> ActionStream:
     )
 
 
-def publish(sink, stream: ActionStream) -> None:
-    """Publish the stream on an absolute 50 Hz schedule.
-
-    Absolute deadlines (not sleep(period - elapsed)) so a slow tick does not
-    push the whole trajectory late: the replay's timing IS the recorded
-    motion's timing. Late ticks are counted and reported — a tick beyond
-    gearsonic's 500 ms staleness threshold would end the VLA session.
-    """
-    period = CONTROL_DT_NS / 1e9
-    total = len(stream)
-    late = 0
-    worst_late = 0.0
-    start = time.monotonic()
-
-    for i, step in enumerate(stream):
-        deadline = start + (i + 1) * period
-        sink.send_latent_action(
-            motion_token=step.token_state,
-            frame_index=step.frame_index,
-            left_hand_joints=step.left_hand_joints,
-            right_hand_joints=step.right_hand_joints,
-        )
-        if i % 250 == 0:
-            print(f"  tick {i}/{total}  ({i * period:.1f}s / {total * period:.1f}s)")
-
-        remaining = deadline - time.monotonic()
-        if remaining > 0:
-            time.sleep(remaining)
-        else:
-            late += 1
-            worst_late = max(worst_late, -remaining)
-
-    elapsed = time.monotonic() - start
-    print(f"Published {total} ticks in {elapsed:.2f}s (expected {total * period:.2f}s)")
-    if late:
-        print(f"WARNING: {late} tick(s) missed their deadline, worst overrun {worst_late * 1e3:.1f}ms")
-
-
 def main(config: Config) -> None:
     session = Path(config.session)
     is_parquet = session.suffix == ".parquet" or (session / "meta" / "info.json").exists()
@@ -174,19 +142,22 @@ def main(config: Config) -> None:
         )
         sys.exit(1)
 
-    from common.io.dds import DdsActionSink
+    dds_cfg = load_dds_config(config.config)
+    domain = config.domain if config.domain is not None else dds_cfg.domain_id
 
-    sink = DdsActionSink(domain_id=config.domain)
-    print("Waiting 1s for DDS discovery...")
-    time.sleep(1.0)
+    # Main thread = lifecycle only: the publisher owns the channel and the
+    # Tx worker thread (ext-sensor-io transmitter pattern).
     print("THE ROBOT MOVES NOW — VR e-stop is A+B+X+Y held 1s.")
-
+    publisher = LatentActionPublisher()
+    publisher.start(
+        stream, domain_id=domain, network_interface=dds_cfg.network_interface
+    )
     try:
-        publish(sink, stream)
+        publisher.wait()
     except KeyboardInterrupt:
         print(
             "\nStopped by user mid-stream — gearsonic sees the stream go stale after 500ms "
             "and runs its LOST recovery (blend to standing, planner reseed, back to origin)."
         )
     finally:
-        sink.close()
+        publisher.stop()

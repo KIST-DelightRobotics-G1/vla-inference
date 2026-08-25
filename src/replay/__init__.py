@@ -25,9 +25,13 @@ Layout:
     latent_action_step.py
                   one publish tick — the pure-Python twin of the DDS wire
                   struct, yielded by iterating an ActionStream
+    latent_action_publisher.py
+                  the execution layer: owns the DDS channel and the Tx
+                  worker thread, puts an ActionStream on
+                  rt/kist/latent_action at 50 Hz (main thread = lifecycle)
     session.py    session directory / episode parquet -> ReplayTimeline
-    cli.py        the publisher (`scripts/replay_session.py` /
-                  `python -m replay`)
+    cli.py        the entry point (`scripts/replay_session.py` /
+                  `python -m replay`): Config + load -> bracket -> publish
 """
 
 # Public surface = names external code actually references. Internal types

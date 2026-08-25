@@ -1,13 +1,9 @@
 """Transport-agnostic interfaces between the runner and the outside world.
 
-The runner core only sees these Protocols; concrete implementations are
-swappable per deployment:
-
-- **ZMQ** (current default): reference-stack compatible; used by the NVIDIA
-  MuJoCo sim tools and the L1 loopback tests.
-- **DDS** (real-robot direction): camera from kist-ext-sensor-io
-  (CycloneDDS, H.264), robot state directly from unitree DDS topics, latent
-  actions via the ``kist_msgs::LatentActionStep`` IDL type.
+The runner core only sees these Protocols; the concrete implementations live
+in ``common/cyclonedds/`` (camera from kist-ext-sensor-io H.264, robot state
+directly from unitree DDS topics, latent actions via the
+``kist_msgs::LatentActionStep`` IDL type), and tests inject fakes.
 
 Structural typing (``typing.Protocol``) — implementations don't inherit,
 they just match the shape.
@@ -16,6 +12,10 @@ they just match the shape.
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
+
+# Operator message convention: a prompt change arrives as one string message
+# with this prefix ("prompt:<text>"); anything else is a single keystroke.
+PROMPT_PREFIX = "prompt:"
 
 
 @runtime_checkable
@@ -50,7 +50,7 @@ class OperatorSource(Protocol):
 
 
 @runtime_checkable
-class ActionSink(Protocol):
+class ActionWriter(Protocol):
     """Outbound channel toward the whole-body controller."""
 
     def send_latent_action(

@@ -2,10 +2,10 @@
 // kist-gearsonic-inference (subscriber). Follows the kist-ext-sensor-io
 // custom-type conventions (module kist_msgs, seq / stamp_ns fields,
 // CycloneDDS idlc codegen: `idlc -l cxx` for C++, mirrored as IdlStruct
-// dataclasses in kist_vla/io/dds.py for Python — keep the two in sync).
+// dataclasses in src/common/cyclonedds/kist_msgs.py for Python — keep the two in sync).
 //
 // Topics (rt/kist/* per the ext-sensor-io convention; authoritative
-// constants: kist_vla/io/dds.py and gearsonic include/vla/vla_token_receiver.hpp):
+// constants: src/common/cyclonedds/kist_msgs.py and gearsonic include/vla/vla_token_receiver.hpp):
 //   "rt/kist/latent_action"  LatentActionStep, Reliable + KeepLast(1), 50 Hz
 //   "rt/kist/wbc_command"    WbcCommand,       Reliable + KeepLast(8)
 //

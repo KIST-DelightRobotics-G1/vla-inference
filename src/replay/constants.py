@@ -1,10 +1,14 @@
-"""Shared constants for the replay pipeline."""
+"""Replay-only constants, plus re-exports of the wire-contract dimensions.
 
-# gearsonic's control period — the motion-token stream's grid spacing
-# (WholeBodyController::kControlDt = 0.02 s).
-CONTROL_DT_NS = 20_000_000
-TOKEN_DIM = 64
-HAND_DIM = 7
+TOKEN_DIM / HAND_DIM / CONTROL_DT_NS are facts of the kist_msgs wire
+contract — their single source is `common/cyclonedds/kist_msgs.py` (change
+them there, together with the IDL). They are re-exported here because every
+replay module speaks in them; the ARBITER_* values below are genuinely
+replay-only (kist-data-collector recording semantics, as written into
+motion_token.csv).
+"""
+
+from common.cyclonedds.kist_msgs import CONTROL_DT_NS, HAND_DIM, TOKEN_DIM
 
 # ControlArbiter::Mode values, as recorded in motion_token.csv.
 ARBITER_NORMAL = 0
@@ -18,3 +22,14 @@ ARBITER_NAMES = {
     ARBITER_VLA: "vla",
     ARBITER_RECOVERING: "recovering",
 }
+
+__all__ = [
+    "CONTROL_DT_NS",
+    "HAND_DIM",
+    "TOKEN_DIM",
+    "ARBITER_NORMAL",
+    "ARBITER_TELEOP",
+    "ARBITER_VLA",
+    "ARBITER_RECOVERING",
+    "ARBITER_NAMES",
+]

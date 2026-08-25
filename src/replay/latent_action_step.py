@@ -11,7 +11,7 @@ class LatentActionStep:
 
     Carries exactly the fields the replay decides. The wire struct's `seq`
     and `stamp_ns` are deliberately absent: they are publish-clock facts the
-    DDS sink stamps at send time, not replay data.
+    DDS writer stamps at send time, not replay data.
     """
 
     frame_index: int

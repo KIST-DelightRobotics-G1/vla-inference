@@ -1,19 +1,15 @@
 """Configuration for the VLA inference runner (tyro CLI dataclasses).
 
-Port defaults match the reference GR00T-WholeBodyControl deployment so the
-two stacks stay drop-in compatible:
-
-- 5550  GR00T policy server (remote mode only, ZMQ REQ/REP)
-- 5555  camera sensor server (SUB)
-- 5556  latent actions to gearsonic (PUB, this process binds)
-- 5557  robot state from gearsonic, ``g1_debug`` topic (SUB)
-- 5580  operator keyboard (SUB)
-"""
+All robot-facing I/O rides CycloneDDS (see common/cyclonedds/). The only
+non-DDS endpoint is the remote policy server (port 5550, Isaac-GR00T's own
+PolicyServer/PolicyClient pair)."""
 
 from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
+
+from .cyclonedds.kist_msgs import CONTROL_DT_NS
 
 # 64-dim SONIC motion token for a stable standing pose, from the reference
 # gear_sonic/utils/inference/initial_poses.py.
@@ -65,52 +61,14 @@ class PolicyConfig:
 
 @dataclass
 class IOConfig:
-    """Endpoints toward gearsonic, the camera server, and the operator."""
-
-    action_transport: Literal["zmq", "dds"] = "zmq"
-    """Outbound action transport. 'zmq' = latent protocol v4 (reference
-    compatible, sim tools); 'dds' = kist_msgs::LatentActionStep over
-    CycloneDDS (real robot, see idl/kist_latent_action.idl)."""
-
-    camera_transport: Literal["zmq", "dds"] = "zmq"
-    """'zmq' = gear_sonic sensor-server wire format (sim tools);
-    'dds' = kist-ext-sensor-io CompressedColorFrame (real robot)."""
-
-    state_transport: Literal["zmq", "dds"] = "zmq"
-    """'zmq' = g1_debug topic from a re-publisher (reference stack);
-    'dds' = unitree rt/lowstate + rt/dex3/*/state directly (real robot,
-    no re-publisher needed)."""
+    """DDS endpoints toward gearsonic, ext-sensor-io, and the robot."""
 
     dds_domain_id: int = 0
-    """DDS domain id (any dds transport)."""
+    """DDS domain id (must match the gearsonic receiver)."""
 
     dds_camera_topic: str = "rt/kist/camera/color/h264"
     """kist-ext-sensor-io color topic mapped to the ego_view observation.
     Per-camera streams use rt/kist/camera/<name>/color/h264."""
-
-    action_host: str = "*"
-    """Bind address for the latent-action PUB socket (zmq transport only)."""
-
-    action_port: int = 5556
-    """Port for latent actions to the gearsonic control loop."""
-
-    state_host: str = "localhost"
-    """Host publishing robot state (gearsonic ZMQ output handler)."""
-
-    state_port: int = 5557
-    """Port for robot state (g1_debug topic)."""
-
-    camera_host: str = "localhost"
-    """Camera sensor-server host."""
-
-    camera_port: int = 5555
-    """Camera sensor-server port."""
-
-    keyboard_host: str = "localhost"
-    """Operator keyboard publisher host."""
-
-    keyboard_port: int = 5580
-    """Operator keyboard publisher port."""
 
 
 @dataclass
@@ -123,8 +81,10 @@ class RunnerConfig:
     prompt: str = "demo"
     """Initial language prompt (changeable at runtime via 'prompt:<text>')."""
 
-    action_publish_rate: int = 50
-    """Rate at which single action steps are published to gearsonic (Hz)."""
+    action_publish_rate: int = round(1e9 / CONTROL_DT_NS)
+    """Rate at which single action steps are published to gearsonic (Hz).
+    Default = gearsonic's control rate (one step per WBC tick — the same
+    CONTROL_DT_NS the wire contract documents)."""
 
     action_horizon: int = 40
     """Steps per action chunk (fixed by the UNITREE_G1_SONIC embodiment)."""

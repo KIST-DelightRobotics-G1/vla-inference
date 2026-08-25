@@ -1,24 +1,27 @@
 """VLA inference runner — the kist-vla-inference process.
 
-Single process, two threads (mirroring the reference
-``gear_sonic/scripts/run_vla_inference.py``):
+Single process, three threads:
 
-- **Main thread**: 50 Hz publish loop. Consumes finished chunks, triggers new
-  inferences, plays the cached chunk back one step per tick, and publishes
-  each step to gearsonic through the ActionSink. Never blocks.
+- **Main thread**: lifecycle only — wires the other two and waits.
+- **Tx thread** (owned by LatentActionPublisher): drives ``_tick`` at the
+  50 Hz publish rate — consumes finished chunks, triggers new inferences,
+  plays the cached chunk back one step per tick, and publishes each step to
+  gearsonic. Never blocks on inference.
 - **Inference worker** (daemon): waits for a trigger, assembles the
   observation from the latest sensor data, runs the policy (~hundreds of ms),
   and hands the validated chunk back through a maxsize-1 queue.
 
-Everywhere data crosses a boundary, only the latest value is kept (CONFLATE
-sockets, maxsize-1 queues) — a slow consumer sees fresh data, never a
-backlog.
+Everywhere data crosses a boundary, only the latest value is kept
+(KeepLast(1) readers, maxsize-1 queues) — a slow consumer sees fresh data,
+never a backlog.
 
-I/O and the policy are injected via the Protocols in ``io.interfaces``
-(defaults built from config), so tests and alternative transports (DDS) swap
-in without touching this loop.
+I/O and the policy are injected via the Protocols in ``common.interfaces``
+(DDS defaults built from config), so tests swap in fakes without touching
+this loop.
 
-Operator keys (via the operator channel):
+Operator keys (via an injected OperatorSource — none by default, in which
+case the loop starts unpaused and the session lifecycle rides the data
+plane, per the no-orchestrator design):
     p  pause / resume the policy loop
     k  start / stop the gearsonic control loop (PLANNER mode)
     i  blend to initial pose and switch gearsonic to POSE mode
@@ -34,13 +37,18 @@ from typing import Any
 
 import numpy as np
 
-from .chunking import ActionChunkPlayer, should_trigger_new_inference
 from common.config import DEFAULT_INITIAL_MOTION_TOKEN, RunnerConfig
 from common.g1_joints import CLOSED_HAND_Q, OPEN_HAND_Q
-from common.io import CameraClient, KeyboardSubscriber, StateSubscriber
-from common.io.interfaces import ActionSink, CameraSource, OperatorSource, StateSource
-from common.io.keyboard import PROMPT_PREFIX
-from common.io.zmq_action_sink import ZmqActionSink
+from common.interfaces import (
+    PROMPT_PREFIX,
+    ActionWriter,
+    CameraSource,
+    OperatorSource,
+    StateSource,
+)
+
+from .chunking import ActionChunkPlayer, should_trigger_new_inference
+from .latent_action_publisher import LatentActionPublisher
 from .observation import ObservationBuilder
 from .policy_backend import PolicyBackend, create_policy
 
@@ -60,7 +68,7 @@ class VLARunner:
         camera: CameraSource | None = None,
         state_source: StateSource | None = None,
         operator: OperatorSource | None = None,
-        action_sink: ActionSink | None = None,
+        action_writer: ActionWriter | None = None,
     ):
         self.config = config
 
@@ -74,42 +82,30 @@ class VLARunner:
 
         if state_source is not None:
             self.state_source: StateSource = state_source
-        elif config.io.state_transport == "dds":
-            from .io.dds_state import DdsStateSource
+        else:
+            from .state_source import DdsStateSource
 
             self.state_source = DdsStateSource(domain_id=config.io.dds_domain_id)
-        else:
-            self.state_source = StateSubscriber(
-                host=config.io.state_host, port=config.io.state_port
-            )
 
         if camera is not None:
             self.camera: CameraSource = camera
-        elif config.io.camera_transport == "dds":
-            from .io.dds_camera import DdsCameraSource
+        else:
+            from .camera_source import DdsCameraSource
 
             self.camera = DdsCameraSource(
                 domain_id=config.io.dds_domain_id, topic=config.io.dds_camera_topic
             )
-        else:
-            self.camera = CameraClient(
-                host=config.io.camera_host, port=config.io.camera_port
-            )
-        self.operator: OperatorSource = (
-            operator
-            if operator is not None
-            else KeyboardSubscriber(host=config.io.keyboard_host, port=config.io.keyboard_port)
-        )
-        if action_sink is not None:
-            self.action_sink: ActionSink = action_sink
-        elif config.io.action_transport == "dds":
-            from .io.dds import DdsActionSink
 
-            self.action_sink = DdsActionSink(domain_id=config.io.dds_domain_id)
-        else:
-            self.action_sink = ZmqActionSink(
-                host=config.io.action_host, port=config.io.action_port
-            )
+        # No default operator: session lifecycle rides the data plane (a
+        # fresh token stream claims gearsonic, going stale releases it), so
+        # without an injected operator the loop starts unpaused.
+        self.operator: OperatorSource | None = operator
+
+        # The publisher owns the DDS channel and the 50 Hz Tx thread; it
+        # drives _tick() and the tick sends through it. An injected writer
+        # (tests) replaces the channel it would open.
+        self.publisher = LatentActionPublisher()
+        self._injected_writer: ActionWriter | None = action_writer
 
         # Chunk playback + inference scheduling
         self.player = ActionChunkPlayer(config.action_horizon)
@@ -123,8 +119,10 @@ class VLARunner:
         self._busy_event = threading.Event()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
 
-        # Operator / robot-side state
-        self.pause_loop = True
+        # Operator / robot-side state. With an operator the loop starts
+        # paused ('p' resumes); without one there is nobody to unpause it,
+        # so it starts running (auto-start, data-plane lifecycle).
+        self.pause_loop = self.operator is not None
         self.cpp_loop_running = False
         self.cpp_mode = "OFF"  # OFF | PLANNER | POSE
         self.initial_pose_left_closed = False
@@ -221,7 +219,7 @@ class VLARunner:
 
     def _send_cpp_command(self, start: bool, planner: bool = False) -> bool:
         try:
-            self.action_sink.send_command(start=start, planner=planner)
+            self.publisher.send_command(start=start, planner=planner)
             self.cpp_loop_running = start
             self.cpp_mode = ("PLANNER" if planner else "POSE") if start else "OFF"
             _print_green(
@@ -241,7 +239,7 @@ class VLARunner:
     def _send_token(
         self, token: np.ndarray, left_hand: np.ndarray, right_hand: np.ndarray
     ) -> None:
-        self.action_sink.send_latent_action(
+        self.publisher.send(
             motion_token=token,
             frame_index=self.frame_counter,
             left_hand_joints=left_hand,
@@ -288,6 +286,8 @@ class VLARunner:
     # ------------------------------------------------------------------
 
     def _handle_operator(self) -> None:
+        if self.operator is None:
+            return
         key = self.operator.read_msg()
         if key is None:
             return
@@ -336,74 +336,79 @@ class VLARunner:
     # Main loop
     # ------------------------------------------------------------------
 
+    def _tick(self) -> None:
+        """One 20 ms Tx tick — runs on the publisher's Tx thread."""
+        self._handle_operator()
+
+        # Consume a finished chunk first so the trigger check below sees a
+        # fresh last_inference_time.
+        try:
+            chunk, inference_start = self._result_queue.get_nowait()
+            inference_delay = time.monotonic() - inference_start
+            self.player.update(chunk, inference_delay, self.config.action_publish_rate)
+            self.last_inference_time = time.monotonic()
+            _print_green(
+                f'New action chunk (prompt: "{self.prompt}", '
+                f"latency: {inference_delay:.3f}s)"
+            )
+        except queue.Empty:
+            pass
+
+        if should_trigger_new_inference(
+            cached_chunk_exists=self.player.has_chunk,
+            inference_thread_running=self._busy_event.is_set(),
+            time_since_last_inference=time.monotonic() - self.last_inference_time,
+            inference_interval=self.inference_interval,
+        ):
+            try:
+                self._trigger_queue.put_nowait(None)
+            except queue.Full:
+                pass
+
+        if self.pause_loop:
+            return
+
+        step = self.player.step()
+        if step is None:
+            print("[DEBUG] No cached chunk yet, waiting...", flush=True)
+            return
+
+        self._send_token(
+            step["motion_token"],
+            step["left_hand_joints"],
+            step["right_hand_joints"],
+        )
+        self.frame_counter += 1
+        if self.frame_counter % 50 == 0:
+            _print_green(
+                f"Sent latent action — frame {self.frame_counter}, "
+                f"token shape {step['motion_token'].shape}"
+            )
+
     def run(self, stop_event: threading.Event | None = None) -> None:
-        """Run the publish loop until KeyboardInterrupt or ``stop_event`` is set."""
+        """Wire the threads and wait — the main thread does lifecycle only.
+
+        The inference worker and the publisher's Tx thread (driving `_tick`
+        at the publish rate) do the actual work; KeyboardInterrupt or
+        ``stop_event`` ends the process.
+        """
         if stop_event is None:
             stop_event = threading.Event()
-        loop_period = 1.0 / self.config.action_publish_rate
-        _print_green(f'Starting policy loop (prompt: "{self.prompt}", paused — press p)')
+        state = "paused — press p" if self.pause_loop else "running"
+        _print_green(f'Starting policy loop (prompt: "{self.prompt}", {state})')
+
         self._worker.start()
+        self.publisher.start(
+            self._tick,
+            rate_hz=self.config.action_publish_rate,
+            domain_id=self.config.io.dds_domain_id,
+            verbose_timing=self.config.verbose_timing,
+            writer=self._injected_writer,
+        )
 
         try:
             while not stop_event.is_set():
-                t_start = time.monotonic()
-                self._handle_operator()
-
-                # Consume a finished chunk first so the trigger check below
-                # sees a fresh last_inference_time.
-                try:
-                    chunk, inference_start = self._result_queue.get_nowait()
-                    inference_delay = time.monotonic() - inference_start
-                    self.player.update(
-                        chunk, inference_delay, self.config.action_publish_rate
-                    )
-                    self.last_inference_time = time.monotonic()
-                    _print_green(
-                        f'New action chunk (prompt: "{self.prompt}", '
-                        f"latency: {inference_delay:.3f}s)"
-                    )
-                except queue.Empty:
-                    pass
-
-                if should_trigger_new_inference(
-                    cached_chunk_exists=self.player.has_chunk,
-                    inference_thread_running=self._busy_event.is_set(),
-                    time_since_last_inference=time.monotonic() - self.last_inference_time,
-                    inference_interval=self.inference_interval,
-                ):
-                    try:
-                        self._trigger_queue.put_nowait(None)
-                    except queue.Full:
-                        pass
-
-                if self.pause_loop:
-                    time.sleep(0.2)
-                    continue
-
-                step = self.player.step()
-                if step is None:
-                    print("[DEBUG] No cached chunk yet, waiting...", flush=True)
-                else:
-                    self._send_token(
-                        step["motion_token"],
-                        step["left_hand_joints"],
-                        step["right_hand_joints"],
-                    )
-                    self.frame_counter += 1
-                    if self.frame_counter % 50 == 0:
-                        _print_green(
-                            f"Sent latent action — frame {self.frame_counter}, "
-                            f"token shape {step['motion_token'].shape}"
-                        )
-
-                elapsed = time.monotonic() - t_start
-                if self.config.verbose_timing or elapsed > loop_period:
-                    print(f"[timing] loop took {elapsed * 1000:.1f}ms (budget {loop_period * 1000:.0f}ms)")
-
-                remaining = loop_period - (time.monotonic() - t_start)
-                if remaining > 0:
-                    time.sleep(remaining)
-
+                time.sleep(0.2)
         except KeyboardInterrupt:
             print("VLA inference loop terminated by user")
         finally:
@@ -413,10 +418,11 @@ class VLARunner:
         self._stop_event.set()
         if self._worker.is_alive():
             self._worker.join(timeout=1.0)
-        self.action_sink.close()
+        self.publisher.stop()
         self.state_source.close()
         self.camera.close()
-        self.operator.close()
+        if self.operator is not None:
+            self.operator.close()
         self.policy.close()
         print("Shutdown complete.")
 
