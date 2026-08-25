@@ -36,7 +36,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
-dds = ["cyclonedds", "av"]
+# cyclonedds MUST be 0.10.x: gearsonic / ext-sensor-io run CycloneDDS 0.10.2 and
+# a 0.11 python reader on the domain segfaults them (XTypes discovery format;
+# reproduced 2026-08-19). PyPI's default is 11.x and 0.10.2 has no cp312 wheel,
+# so it builds from source against a local libddsc:
+#   bash scripts/install_cyclonedds.sh        (C lib -> /opt/cyclonedds, then the binding)
+dds = ["cyclonedds==0.10.2", "av"]
 # The DDS state source additionally needs unitree_sdk2py (not on PyPI):
 #   uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
 # (--no-deps: it pins an old cyclonedds and pulls opencv-python; its IDL

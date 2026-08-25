@@ -25,7 +25,7 @@ av==18.1.0
 certifi==2026.7.22
 charset-normalizer==3.5.1
 click==8.4.2
-cyclonedds==11.0.1
+cyclonedds==0.10.2
 diffusers==0.35.1
 dm-tree==0.1.10
 docstring-parser==0.18.0

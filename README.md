@@ -114,7 +114,7 @@ into `thirdparty/gr00t/` (Apache-2.0) — see `thirdparty/gr00t/VENDORED_FROM.md
 | torch 2.9.0+cu128, torchvision, transformers 4.57.3, diffusers, albumentations, pillow, dm-tree, huggingface-hub | PyPI + cu128 index, pinned | what `thirdparty/gr00t` imports — only the inference path, not gr00t's training/export stack |
 | `thirdparty/gr00t` | vendored, NVIDIA/Isaac-GR00T `9c7e746` | N1.7 policy (20 files); re-vendor with `scripts/vendor_gr00t.sh` |
 | flash-attn 2.8.3 | `[flash]` extra, prebuilt wheel | optional; sdpa fallback without it |
-| `cyclonedds`, `av` | PyPI, `[dds]` extra | DDS transports + H.264 camera decode |
+| `cyclonedds` **0.10.2** (C lib + python binding), `av` | `[dds]` extra; C lib via `scripts/install_cyclonedds.sh` | DDS transports + H.264 camera decode. **Not the PyPI default 11.x** — see below |
 | `unitree_sdk2py` | local clone (`--no-deps`) | unitree DDS IDL types for the state source |
 | N1.7 checkpoint | UNITREE_G1_SONIC finetune | **hard input** — the base `nvidia/GR00T-N1.7-3B` has no SONIC action head; see the [finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl) |
 | `pytest` | `[dev]` extra | tests |
@@ -166,10 +166,39 @@ matching wheel (the backbone falls back to sdpa attention). On the robot side
 (`--policy.mode remote`) the same install works; torch is only exercised in
 local mode.
 
-#### 3. DDS transports (real robot)
+#### Quick start with Docker
+
+The image bakes in steps 2–3 (venv, all Python deps, CycloneDDS 0.10.2, `unitree_sdk2py`) on
+`nvcr.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04`:
 
 ```bash
-uv pip install -e ".[dds]"
+./docker/build.sh      # docker build -f docker/Dockerfile .  (context = repo root)
+./docker/run.sh        # shell in the container; re-attaches if it already exists
+```
+
+`run.sh` wires `--gpus all`, `--network host` (DDS/ZMQ share the host
+network with gearsonic and ext-sensor-io), mounts `~/vla_data` at
+`/vla_data` and `~/hf_cache` at `/hf_cache` (`HF_HOME` — token + the gated
+backbone; override with `VLA_DATA=…`/`HF_CACHE=…`). `DEV=1 ./docker/run.sh`
+bind-mounts the repo over `/workspace` to edit code without a rebuild.
+Inside, start with `python scripts/smoke_test_policy.py --model-path
+/vla_data/checkpoint-18000`. Steps 4–5 below are host-side / manual.
+
+#### 3. DDS transports (real robot)
+
+CycloneDDS must be **0.10.2**, the version gearsonic and ext-sensor-io are
+pinned to. PyPI's default `cyclonedds` is 11.x (libddsc 0.11 bundled) and the
+XTypes discovery format differs: the moment a 0.11 Python *reader* joins the
+domain, every 0.10.2 C++ participant segfaults (`ddsi_xt_type_init_impl`) —
+one `run_vla.py` with DDS state/camera kills gearsonic and ext-sensor-io at
+once (reproduced 2026-08-19; a 0.11 *writer* alone works, so the token-publish
+link check does not reveal it). 0.10.2 has no cp312 wheel, so it is built
+against a local C library:
+
+```bash
+sudo apt install -y cmake build-essential python3.12-dev   # headers for the binding
+bash scripts/install_cyclonedds.sh      # C lib -> /opt/cyclonedds (sudo), then cyclonedds==0.10.2 into the venv
+uv pip install -e ".[dds]"              # av (cyclonedds already satisfied)
 # unitree IDL types for the state source (--no-deps: it pins an old
 # cyclonedds and pulls opencv-python; its IDL types work fine with current
 # cyclonedds and opencv-python-headless)
