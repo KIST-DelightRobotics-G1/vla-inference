@@ -56,7 +56,7 @@ uv venv --python 3.12 && source .venv/bin/activate
 uv pip install -e ".[dds,parquet,encode,dev]"
 ```
 
-#### 3. Download the encoder model (only for `--joints`)
+#### 3. Download the encoder model
 
 ```bash
 wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx
@@ -91,17 +91,12 @@ python scripts/replay_session.py --path <dataset-dir> --episode 3
 python scripts/replay_session.py --path <dataset-dir>/data/chunk-000/episode_000003.parquet
 ```
 
-The stream is bracketed with a standing lead-in/out and crossfades;
-recording gaps are blended across on the 20 ms grid, and a gap longer than
-`--max-gap-ticks` (0.5 s) aborts the run unless `--force` is given.
-
 #### Joint re-encoding (checkpoint-portable replay)
 
 The recorded tokens are latents of the collection-time SONIC checkpoint —
 against a different decoder checkpoint they produce a different, possibly
-unsafe motion. `--joints` replays across checkpoint changes: it re-encodes
-the recording's measured joints through the paired encoder at
-`models/model_encoder.onnx` (swap it together with gearsonic's decoder):
+unsafe motion. `--joints` replays across checkpoint changes by re-encoding
+the recording's joints instead:
 
 ```bash
 python scripts/replay_session.py --path <dataset-dir> --episode 1 --joints
