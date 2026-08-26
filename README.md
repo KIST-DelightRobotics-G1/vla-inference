@@ -91,12 +91,11 @@ python scripts/replay_session.py --path <dataset-dir> --episode 3
 python scripts/replay_session.py --path <dataset-dir>/data/chunk-000/episode_000003.parquet
 ```
 
-#### Joint re-encoding (checkpoint-portable replay)
+#### Joint re-encoding
 
-The recorded tokens are latents of the collection-time SONIC checkpoint —
-against a different decoder checkpoint they produce a different, possibly
-unsafe motion. `--joints` replays across checkpoint changes by re-encoding
-the recording's joints instead:
+The recorded tokens are only valid against the collection-time SONIC
+checkpoint; `--joints` re-encodes the recording's joints instead, so a
+session survives a checkpoint change:
 
 ```bash
 python scripts/replay_session.py --path <dataset-dir> --episode 1 --joints
