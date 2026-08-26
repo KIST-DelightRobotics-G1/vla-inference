@@ -8,7 +8,7 @@ edit is wrong — regenerate the tables from the reference model instead.
 
 import numpy as np
 
-from kist_vla.g1_joints import (
+from common.g1_joints import (
     BODY_ACTUATED_INDICES,
     CLOSED_HAND_Q,
     G1_JOINT_NAMES,

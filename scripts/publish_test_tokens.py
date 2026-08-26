@@ -13,7 +13,7 @@ Usage:
     python scripts/publish_test_tokens.py --domain 0 --duration 10
 
 WARNING: the standing-pose token is specific to the SONIC checkpoint used in
-training (see kist_vla/config.py). With a different SONIC checkpoint on the
+training (see src/common/config.py). With a different SONIC checkpoint on the
 gearsonic side it produces a different, possibly unsafe pose.
 """
 
@@ -23,9 +23,9 @@ from dataclasses import dataclass
 import numpy as np
 import tyro
 
-from kist_vla.config import DEFAULT_INITIAL_MOTION_TOKEN
-from kist_vla.g1_joints import OPEN_HAND_Q
-from kist_vla.io.dds import DdsActionSink
+from common.config import DEFAULT_INITIAL_MOTION_TOKEN
+from common.g1_joints import OPEN_HAND_Q
+from common.cyclonedds.kist_msgs_writer import KistMsgsWriter
 
 
 @dataclass
@@ -44,11 +44,11 @@ class Config:
 
 
 def main(config: Config) -> None:
-    sink = DdsActionSink(domain_id=config.domain)
+    writer = KistMsgsWriter(domain_id=config.domain)
     time.sleep(1.0)  # discovery
 
     if config.send_start_command:
-        sink.send_command(start=True, planner=False)
+        writer.send_command(start=True, planner=False)
         print("Sent WbcCommand(start)")
 
     token = DEFAULT_INITIAL_MOTION_TOKEN
@@ -60,7 +60,7 @@ def main(config: Config) -> None:
     try:
         for i in range(n_steps):
             t0 = time.monotonic()
-            sink.send_latent_action(
+            writer.send_latent_action(
                 motion_token=token,
                 frame_index=i,
                 left_hand_joints=OPEN_HAND_Q,
@@ -74,7 +74,7 @@ def main(config: Config) -> None:
     except KeyboardInterrupt:
         print("\nStopped by user")
     finally:
-        sink.close()
+        writer.close()
         print("Done — the receiver will see the stream go stale "
               "(gearsonic drops to damping after 500ms in VLA mode).")
 

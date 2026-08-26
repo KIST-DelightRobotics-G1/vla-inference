@@ -11,8 +11,8 @@ Examples:
 
 import tyro
 
-from kist_vla.config import RunnerConfig
-from kist_vla.runner import main
+from common.config import RunnerConfig
+from vla.runner import main
 
 if __name__ == "__main__":
     main(tyro.cli(RunnerConfig))

@@ -25,3 +25,9 @@ models/
 *.log
 *.tmp
 *.swp
+
+# docker/run.sh host<->container exchange dir
+shared/
+
+# GEAR-SONIC encoder ONNX (downloaded: docker build / README wget)
+models/

@@ -1,0 +1,10 @@
+# Keep the build context to what the Dockerfile COPYs.
+.venv
+.git
+__pycache__
+**/__pycache__
+*.egg-info
+docker
+requirements.lock.txt
+shared
+models
