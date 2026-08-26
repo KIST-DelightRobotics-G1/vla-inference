@@ -1,48 +1,12 @@
 # kist-vla-inference
 
-Python latent-action publisher for the KIST Unitree G1 stack. Replays
-recorded sessions and training-export episodes as 64-dim SONIC motion
-tokens + hand joints at 50 Hz to
+Python replay publisher streaming SONIC motion tokens to
 [kist-gearsonic-inference](https://github.com/Safety-Node/kist-gearsonic-inference)
-(C++ whole-body controller).
+on the Unitree G1 humanoid robot.
 
 ## Architecture
 
 [![Architecture](docs/kist-vla-inference.svg)](docs/kist-vla-inference.svg)
-
-The replay implementation (`src/replay/`, runnable as `python -m replay`) is
-a stage pipeline — the folder listing is the data flow, one dataclass
-contract between each stage:
-
-    io/         disk -> Tokens, Joints (collector CSVs and LeRobot parquet
-                both; the file format dies here)
-    aligner/    side streams joined onto the token clock -> AlignedTokens,
-                AlignedJoints (cross-stream time dies here)
-    encoder/    AlignedJoints -> EncodedTokens through the SONIC encoder
-                ONNX (checkpoint portability, CPU)
-    builder/    20 ms grid resampling + gap blending -> safety gate +
-                standing bracket -> ActionStream (the publish plan)
-    publisher/  ActionStream -> rt/kist/latent_action at 50 Hz (owns the
-                DDS channel and the Tx thread; main thread = lifecycle)
-
-The decoder on the gearsonic side stays closed-loop on live robot state, so
-the robot balances itself — this is a latent replay, not an open-loop joint
-playback.
-
-### Wire contract — DDS
-
-- **`idl/kist_latent_action.idl` is the shared action contract** — the
-  gearsonic C++ side codegens from it (`idlc -l cxx`); the Python side
-  mirrors it by hand in `src/common/cyclonedds/kist_msgs.py`; keep the two
-  in sync.
-- Topics: `rt/kist/latent_action` (50 Hz stream), `rt/kist/wbc_command`
-  (reserved — operator channel, no subscriber yet).
-- QoS: writers are Reliable + KeepLast(1) — "latest wins", and Reliable so
-  they match both Reliable and BestEffort readers (gearsonic subscribes via
-  unitree's ChannelSubscriber, whose reader QoS we don't control).
-- Network settings live in `config/config.yaml` (gearsonic-style:
-  `dds.domain_id` + `dds.network_interface`, the latter applied via
-  `CYCLONEDDS_URI`).
 
 ## Dependencies
 
