@@ -1,126 +1,63 @@
 # kist-vla-inference
 
-GR00T N1.7 VLA inference service for the KIST Unitree G1 stack. Runs an
-[Isaac-GR00T](https://github.com/NVIDIA/Isaac-GR00T) N1.7 policy
-(UNITREE_G1_SONIC embodiment) and streams 64-dim SONIC motion tokens + hand
-joints at 50 Hz to
+Python latent-action publisher for the KIST Unitree G1 stack. Replays
+recorded sessions and training-export episodes as 64-dim SONIC motion
+tokens + hand joints at 50 Hz to
 [kist-gearsonic-inference](https://github.com/Safety-Node/kist-gearsonic-inference)
 (C++ whole-body controller).
 
-**Scope**: inference only — this service consumes a finished checkpoint and
-streams action tokens. Data collection and finetuning happen outside this
-repo. The two services are independent peers with no central supervisor:
-coordination rides the messages themselves (liveness via DDS Deadline QoS,
-session lifecycle via the token stream, operator commands as plain
-messages), and process lifecycle is the host's job (e.g. systemd).
-
 ## Architecture
 
-```
-                 ┌──────────────────────────────────────────────┐
-                 │   kist-vla-inference (this repo, Python)      │
- camera ─────────►      Inference worker thread                  │
-                 │      observation → GR00T N1.7 (~0.4s, GPU)    │
- robot state ────►      → chunk: motion_token(40,64)+hands(40,7)²│
-                 │      ▼  maxsize-1 queue                       │
-                 │      Tx thread (50 Hz publish loop)           │
-                 │      latency-compensated chunk playback       │
-                 └──────│───────────────────────────────────────-┘
-                        ▼ latent actions, 50 Hz
-                 ┌──────────────────────────────────────────────┐
-                 │  kist-gearsonic-inference (C++, 50 Hz RT)     │
-                 │  token[64] → PolicyDecoder(TRT) → motors      │
-                 └──────────────────────────────────────────────┘
-```
+[![Architecture](docs/kist-vla-inference.svg)](docs/kist-vla-inference.svg)
 
-Single process, three threads:
+The replay implementation (`src/replay/`, runnable as `python -m replay`) is
+a stage pipeline — the folder listing is the data flow, one dataclass
+contract between each stage:
 
-- **Main thread** — lifecycle only: wires the other two and waits.
-- **Tx thread** (owned by the publisher) — 50 Hz loop: consume finished
-  chunks, trigger inference, play the cached chunk back one step per tick,
-  publish each step. Never blocks; while inference runs it keeps playing
-  the previous chunk, and a stale chunk degrades to holding its last token.
-- **Inference worker** — assembles the observation from the latest sensor
-  data and runs the policy (~0.4 s per chunk at 2.5 Hz).
+    io/         disk -> Tokens, Joints (collector CSVs and LeRobot parquet
+                both; the file format dies here)
+    aligner/    side streams joined onto the token clock -> AlignedTokens,
+                AlignedJoints (cross-stream time dies here)
+    encoder/    AlignedJoints -> EncodedTokens through the SONIC encoder
+                ONNX (checkpoint portability, CPU)
+    builder/    20 ms grid resampling + gap blending -> safety gate +
+                standing bracket -> ActionStream (the publish plan)
+    publisher/  ActionStream -> rt/kist/latent_action at 50 Hz (owns the
+                DDS channel and the Tx thread; main thread = lifecycle)
 
-Every cross-boundary handoff keeps only the latest value (KeepLast(1)
-readers, maxsize-1 queues) — consumers see fresh data, never a backlog.
-
-### Transports
-
-All robot-facing I/O rides CycloneDDS (`src/common/cyclonedds/`); the runner
-core talks to it through the Protocols in `src/common/interfaces.py`, so
-tests inject fakes without touching the loop:
-
-| Channel | DDS implementation |
-|---|---|
-| actions → gearsonic | `kist_msgs::LatentActionStep` / `WbcCommand` (`src/common/cyclonedds/kist_msgs.py + kist_msgs_writer.py`) |
-| camera | kist-ext-sensor-io `CompressedColorFrame`, H.264 → PyAV decode (`src/vla/camera_source.py`) |
-| robot state | unitree `rt/lowstate` + `rt/dex3/{left,right}/state` directly (`src/vla/state_source.py`) — no re-publisher process needed |
-
-The only non-DDS endpoint is the remote policy server (port 5550,
-Isaac-GR00T's own PolicyServer/PolicyClient pair, `--policy.mode remote`).
+The decoder on the gearsonic side stays closed-loop on live robot state, so
+the robot balances itself — this is a latent replay, not an open-loop joint
+playback.
 
 ### Wire contract — DDS
 
 - **`idl/kist_latent_action.idl` is the shared action contract** — the
   gearsonic C++ side codegens from it (`idlc -l cxx`); the Python side
-  mirrors it in `src/common/cyclonedds/kist_msgs.py`; keep the two in sync. The camera type
-  mirrors kist-ext-sensor-io's `idl/kist_camera_frames.idl`.
+  mirrors it by hand in `src/common/cyclonedds/kist_msgs.py`; keep the two
+  in sync.
 - Topics: `rt/kist/latent_action` (50 Hz stream), `rt/kist/wbc_command`
   (reserved — operator channel, no subscriber yet).
 - QoS: writers are Reliable + KeepLast(1) — "latest wins", and Reliable so
-  they match both Reliable and BestEffort
-  readers (gearsonic subscribes via unitree's ChannelSubscriber, whose
-  reader QoS we don't control); commands Reliable + KeepLast(8); our own
-  state/camera readers BestEffort + KeepLast(1).
-- State wire semantics were verified against the reference deploy
-  (`zmq_output_handler.hpp`): `body_q` = 29 absolute joint angles in Unitree
-  motor order; `base_quat` = **pelvis** IMU quaternion (w,x,y,z) from
-  LowState — not the torso IMU on `rt/secondary_imu`.
-- Remaining hardware verification: Dex3 hand motor order and IMU quaternion
-  convention against the real robot / final data-collection pipeline.
-
-### Provenance
-
-Core loop and utilities are ported from NVIDIA
-[GR00T-WholeBodyControl](https://github.com/NVlabs/GR00T-WholeBodyControl)
-(`gear_sonic/scripts/run_vla_inference.py` and friends, Apache-2.0), with the
-pinocchio robot model replaced by static joint tables
-(`src/common/g1_joints.py`, dumped from the reference model — re-dump, don't
-hand-edit). `gr00t` is a dependency; `gear_sonic` is not.
+  they match both Reliable and BestEffort readers (gearsonic subscribes via
+  unitree's ChannelSubscriber, whose reader QoS we don't control).
+- Network settings live in `config/config.yaml` (gearsonic-style:
+  `dds.domain_id` + `dds.network_interface`, the latter applied via
+  `CYCLONEDDS_URI`).
 
 ## Dependencies
 
 | Component | Version | Role |
 |---|---|---|
-| Python | 3.12 (package itself runs on ≥ 3.10) | `gr00t` requires 3.12 for the local policy backend |
-| numpy, scipy, opencv-python-headless, tyro, pyyaml | PyPI | core runtime (installed automatically) |
-| `gr00t` (Isaac-GR00T) | local clone, pinned commit — see below | N1.7 policy — local mode only; remote mode and tests run without it |
-| `cyclonedds`, `av` | PyPI, `[dds]` extra | DDS transports + H.264 camera decode |
-| `unitree_sdk2py` | local clone (`--no-deps`) | unitree DDS IDL types for the state source |
-| N1.7 checkpoint | UNITREE_G1_SONIC finetune | **hard input** — the base `nvidia/GR00T-N1.7-3B` has no SONIC action head; see the [finetuning workflow](https://github.com/NVIDIA/Isaac-GR00T/tree/main/examples/GR00TWholeBodyControl) |
+| Python | ≥ 3.10 (docker image: 3.12) | runtime |
+| numpy, tyro, pyyaml | PyPI | core runtime (installed automatically) |
+| `cyclonedds` | PyPI, `[dds]` extra | DDS publisher (the wheel bundles libddsc — no system install) |
+| `pyarrow` | PyPI, `[parquet]` extra | LeRobot training-export episodes |
+| `onnxruntime` | PyPI, `[encode]` extra | joint re-encoding (CPU provider — no GPU) |
 | `pytest` | `[dev]` extra | tests |
+| GEAR-SONIC encoder | HF `nvidia/GEAR-SONIC` | `models/model_encoder.onnx` for `--joints`; pairs with gearsonic's decoder — swap them together |
 
-Checkpoint couplings:
-
-- **The `gr00t` commit is part of the checkpoint contract.** A checkpoint's
-  `config.json` is a *delta* against the code's defaults, not a full spec —
-  keys it omits (`input_embedding_dim`, `state_history_length`,
-  `attend_text_every_n_blocks`, ...) come from
-  `gr00t/configs/model/gr00t_n1d7.py`, so the assembled architecture is
-  `config.json` + that version of the code. A renamed module makes
-  `AutoModel.from_pretrained` (HF-default non-strict) randomly initialize the
-  affected weights behind a warning: the policy loads, runs, and emits
-  garbage motion tokens. The expected commit lives in
-  `EXPECTED_GR00T_COMMIT` (`src/vla/gr00t_version.py`) and is checked on
-  every `create_policy` call; update it only together with the checkpoint.
-- `DEFAULT_INITIAL_MOTION_TOKEN` (`src/common/config.py`) is specific to the
-  SONIC checkpoint used in training — must be re-derived if the gearsonic
-  SONIC checkpoint changes.
-- The normalization statistics used to decode actions live inside the N1.7
-  checkpoint's processor and change with every finetune (handled by `gr00t`
-  automatically — nothing to copy here).
+`requirements.lock.txt` records the exact third-party set this was verified
+with (a record, not the install path).
 
 ## Installation
 
@@ -131,184 +68,84 @@ git clone https://github.com/Safety-Node/kist-vla-inference.git
 cd kist-vla-inference
 ```
 
+All following steps run from the repository root.
+
+#### Quick Start with Docker
+
+The image bakes in everything below (dependencies, the encoder model, the
+repo source) and verifies the import graph + replay test suite at build
+time:
+
+```bash
+./docker/build.sh      # builds the image (docker build -t kist-vla-inference)
+./docker/run.sh        # shell in the container; ready to publish
+```
+
+`run.sh` wires `--network host` (CycloneDDS discovery/multicast toward
+gearsonic) and mounts `<repo>/shared` for sessions and datasets. The
+numbered steps below (2–3) are the manual (non-Docker) alternative.
+
 #### 2. Create the virtualenv
 
 ```bash
 uv venv --python 3.12 && source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv pip install -e ".[dds,parquet,encode,dev]"
 ```
 
-#### 3. DDS transports (real robot)
+#### 3. Download the encoder model (only for `--joints`)
 
 ```bash
-uv pip install -e ".[dds]"
-# unitree IDL types for the state source (--no-deps: it pins an old
-# cyclonedds and pulls opencv-python; its IDL types work fine with current
-# cyclonedds and opencv-python-headless)
-uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
+wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx
 ```
-
-#### 4. Local policy backend (GPU box only)
-
-`gr00t` is not on PyPI — install from a local clone, checked out at the
-commit the checkpoint was finetuned with
-(`EXPECTED_GR00T_COMMIT` in `src/vla/gr00t_version.py`):
-
-```bash
-bash scripts/install_gr00t.sh
-```
-
-That clones the fork, checks it out **detached** at the pinned commit, and
-installs it. It reads the commit from `src/vla/gr00t_version.py` so there is
-one authority for it; `GR00T_SRC` and `GR00T_REMOTE` override the location.
-Detached is deliberate — gr00t is installed editable, so leaving the clone on
-a tracking branch means a later `git pull` changes the running model with no
-reinstall. The equivalent by hand:
-
-```bash
-git clone https://github.com/foodbanana/Isaac-GR00T.git ~/Isaac-GR00T
-git -C ~/Isaac-GR00T checkout 5ac4e6b6ad7467f4ccd441f6d7ec574d4da0a21f
-uv pip install -e ~/Isaac-GR00T
-```
-
-That commit is a KIST fork of NVIDIA's `9c7e746`; NVIDIA's `main` is **not** a
-superset of it (see `src/vla/gr00t_version.py`). The install pulls
-torch 2.9.0+cu128 and a prebuilt flash-attn 2.8.3 cp312 wheel from the URL the
-clone's `[tool.uv.sources]` names — no CUDA source build, but Python must be
-3.12.
-
-The VLM backbone (`nvidia/Cosmos-Reason2-2B`) is a **gated** HF repo and is
-fetched from Hugging Face even when `--policy.model-path` is a local
-directory; without a token in `HF_HOME` the policy dies with a 401.
-
-Skip this whole step on the robot side when using `--policy.mode remote`.
-
-#### 5. Runtime environment
-
-```bash
-source scripts/env.sh
-```
-
-Sets `HF_HOME`, drops out of conda, and clears `PYTHONPATH` — a globally
-sourced ROS 2 puts Python 3.10 site-packages there, which shadows imports
-inside the 3.12 venv (`pytest` dies on `No module named 'yaml'`). This package
-does not use ROS; the `rt/*` topic names are unitree's DDS naming convention.
-
-`requirements.lock.txt` records the exact third-party set this was verified
-with. It is a record, not the install path — `install_gr00t.sh` reproduces it,
-since gr00t's own pyproject pins nearly everything with `==`.
-
-## Build
-
-No build step — pure Python, no codegen (the DDS types in
-`src/common/cyclonedds/kist_msgs.py` mirror `idl/kist_latent_action.idl` by hand; keep them
-in sync when the IDL changes). Verify the install with the test suite,
-which runs without a GPU, model, or robot:
-
-```bash
-pytest
-```
-
-DDS tests run when `cyclonedds` is installed and are skipped otherwise;
-parquet-replay tests likewise skip without `pyarrow`.
 
 ## Usage
 
-**Tokens drive the robot** — with a live gearsonic on the DDS domain, a
-fresh token stream switches it to external-token mode and the robot moves.
-Clear the area and keep the e-stop (VR controller) in reach.
+Set up the config once before running:
 
-```bash
-# Single process (model in-process, default)
-python scripts/run_vla.py --policy.model-path /path/to/checkpoint-XXXX
+- `config/config.yaml` — DDS domain (`dds.domain_id`, 0 = real robot) and
+  NIC (`dds.network_interface`, must match the gearsonic side).
+- All keys and the replay CLI parameters:
+  [docs/configuration.md](docs/configuration.md).
 
-# Or with the model on another machine:
-python scripts/run_policy_server.py --model-path /path/to/checkpoint-XXXX   # GPU box
-python scripts/run_vla.py --policy.mode remote --policy.host <gpu-box>      # robot side
-```
+**THE ROBOT MOVES** — with a live gearsonic on the DDS domain, a fresh
+token stream switches it to external-token mode. Hang the robot or clear
+the area, keep the VR controller in reach (A+B+X+Y held 1s = emergency
+stop).
 
-`--help` shows all options (rates, prompt, action bound).
-`--io.dds-domain-id` sets the domain (default 0); `--io.dds-camera-topic`
-maps a kist-ext-sensor-io color stream to the `ego_view` observation.
-
-Without an operator source the loop starts unpaused and the session
-lifecycle rides the data plane: publishing fresh tokens claims gearsonic,
-going stale releases it. (The runner still accepts an injected
-OperatorSource — `p` pause · `k` loop start/stop · `i` initial pose ·
-`[` `]` hands · `prompt:<text>` — the operator channel over DDS is the
-reserved `WbcCommand` topic.)
-
-#### Hardware link check (no checkpoint needed)
-
-Publishes the safe standing token at 50 Hz over DDS — verifies the
-token → decoder → motors path against a live gearsonic without a model:
-
-```bash
-python scripts/publish_test_tokens.py --duration 15
-```
-
-#### Session replay (no checkpoint needed)
+#### Session replay
 
 Replays a [kist-data-collector](https://github.com/Safety-Node/kist-data-collector)
-session on the robot: its recorded `motion_token.csv` is a copy of the token
-gearsonic's decoder consumed on each CONTROL tick, so publishing it back on
-`rt/kist/latent_action` at 50 Hz drives the whole body through the same latent
-trajectory — hand targets come from `hand_cmd_{side}.csv`. The decoder stays
-closed-loop on live robot state, so the robot balances itself; this is a latent
-replay, not an open-loop joint playback.
+session: its `motion_token.csv` is a copy of the token gearsonic's decoder
+consumed on each CONTROL tick, and `hand_cmd_{side}.csv` carries the
+commanded hand targets. A LeRobot training-export episode replays the same
+way — its `action.motion_token` / `teleop.*_hand_joints` columns carry the
+same quantities:
 
 ```bash
-# Against the gearsonic probe (./build/vla_receiver_probe 42)
-python scripts/replay_session.py --path <session-dir> --domain 42
+# Collector session directory:
+python scripts/replay_session.py --path <session-dir>
 
-# On the real robot — ROBOT MOVES, hang it first
-python scripts/replay_session.py --path <session-dir> --domain 0
+# LeRobot dataset root + episode index, or the parquet file directly:
+python scripts/replay_session.py --path <dataset-dir> --episode 3
+python scripts/replay_session.py --path <dataset-dir>/data/chunk-000/episode_000003.parquet
 ```
-
-DDS network settings live in `config/config.yaml` (gearsonic-style:
-`dds.domain_id` + `dds.network_interface`, the latter applied via
-`CYCLONEDDS_URI`); `--domain` overrides the file's domain id.
 
 The published stream is bracketed — standing lead-in, crossfade, replay,
 crossfade, standing lead-out — so gearsonic claims VLA from a known pose and
-the episode does not end mid-motion. `motion_token.csv` rows exist only for
-ticks that decoded a token, so `seq`/`stamp_ns` gaps (INIT ramp, damping,
-e-stop) are resampled onto a strict 20 ms grid and blended across; a gap longer
-than `--max-gap-ticks` (0.5 s) is reported and aborts the run unless `--force`
-is given. The implementation is the
-`src/replay/` package (also runnable as `python -m replay`):
-session loading is pure data handling with no DDS — `tests/test_replay.py`
-pins it against the collector's CSV schemas — and only `cli.py` touches the
-wire.
-
-A LeRobot training-export episode replays the same way (needs `pyarrow`,
-`uv pip install -e ".[parquet]"`) — its `action.motion_token` /
-`teleop.*_hand_joints` columns carry the same quantities the collector CSVs
-record:
-
-```bash
-# By dataset root + episode index, or by the parquet file directly:
-python scripts/replay_session.py --path <dataset-dir> --episode 3 --domain 42
-python scripts/replay_session.py --path <dataset-dir>/data/chunk-000/episode_000003.parquet --domain 42
-```
+the episode does not end mid-motion. Recording gaps (INIT ramp, damping,
+e-stop) are resampled onto a strict 20 ms grid and blended across; a gap
+longer than `--max-gap-ticks` (0.5 s) is reported and aborts the run unless
+`--force` is given.
 
 #### Joint re-encoding (checkpoint-portable replay)
 
-`--joints` ignores the recorded tokens and RE-ENCODES the
-recording's whole-body joints through the SONIC encoder at the fixed path
+`--joints` ignores the recorded tokens and RE-ENCODES the recording's
+whole-body joints through the SONIC encoder at the fixed path
 `models/model_encoder.onnx` (g1 mode — the offline port of gearsonic's
-`token_encoder.cpp` `fill_obs()`, see `src/replay/encoder/encoder.py`).
-Works for both input kinds: a parquet episode encodes `observation.state`
-(finite-difference velocities); a collector CSV session encodes
-`lowstate.csv` q + measured dq, aligned onto the motion_token grid.
-The docker image bakes the encoder in (same convention as gearsonic's
-`models/`); a host checkout fetches it once with
-`wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx`
-and needs `uv pip install -e ".[encode]"`:
+`token_encoder.cpp` `fill_obs()`, see `src/replay/encoder/`):
 
 ```bash
-python scripts/replay_session.py --path <dataset-dir> --episode 1 --domain 42 \
-    --joints
+python scripts/replay_session.py --path <dataset-dir> --episode 1 --joints
 ```
 
 This is how a session survives a decoder-checkpoint change: the recorded
@@ -316,13 +153,13 @@ latents don't transfer, but the joints do, through the NEW checkpoint's
 paired encoder (swap `models/model_encoder.onnx` together with gearsonic's
 decoder). The encoder input is the measured joints (`observation.state` /
 `lowstate.csv`) — the motion that actually happened; re-encoding the WBC
-commanded targets instead was validated to diverge (cosine 0.56).
-Verified against a real episode: re-encoded (g1-mode) vs recorded
-(teleop-mode) tokens agree at median per-tick cosine 0.95 on the same
-checkpoint.
+commanded targets instead was validated to diverge (median per-tick cosine
+0.56 vs 0.95 for measured, on the same checkpoint). Hands always replay the
+commanded targets: hand values are not latents, transfer across checkpoints
+as-is, and commands carry the grip force that measured positions lose.
 
-**The recorded tokens are latents of the SONIC checkpoint that was running when
-the session was collected.** Replaying them against a gearsonic built on a
-different SONIC decoder checkpoint produces a different, possibly unsafe motion
-— the two latent spaces are not comparable. Same coupling as
-`DEFAULT_INITIAL_MOTION_TOKEN`.
+**The recorded tokens are latents of the SONIC checkpoint that was running
+when the session was collected.** Replaying them against a gearsonic built
+on a different SONIC decoder checkpoint produces a different, possibly
+unsafe motion — the two latent spaces are not comparable. Use `--joints`
+across checkpoint changes.
