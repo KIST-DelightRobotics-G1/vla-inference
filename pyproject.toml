@@ -5,35 +5,24 @@ description = "GR00T N1.7 VLA inference service for the KIST Unitree G1 stack. P
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
+# The replay-only dependency surface. The VLA runtime (src/vla/) needs more
+# (gr00t at its pinned commit, scipy, opencv, av, unitree_sdk2py) — recover
+# its install story from git history together with the docker VLA
+# environment.
 dependencies = [
     "numpy",
-    "scipy",
-    "opencv-python-headless",
     "tyro",
     "pyyaml",
 ]
 
-# The `local` policy backend additionally requires the `gr00t` package
-# (Isaac-GR00T, Python 3.12 only). It is not on PyPI — install from a local
-# clone checked out at the commit the checkpoint was finetuned with:
-#   git clone https://github.com/foodbanana/Isaac-GR00T.git ~/Isaac-GR00T
-#   git -C ~/Isaac-GR00T checkout 5ac4e6b6ad7467f4ccd441f6d7ec574d4da0a21f
-#   uv pip install -e ~/Isaac-GR00T
-# The commit is a checkpoint coupling, not a preference — see
-# src/vla/gr00t_version.py (EXPECTED_GR00T_COMMIT) and the README.
-# The `remote` backend and all unit tests run without it.
-
 [project.optional-dependencies]
 dev = ["pytest"]
-dds = ["cyclonedds", "av"]
+# Publishing over DDS (src/replay/publisher/):
+dds = ["cyclonedds"]
 # Replaying LeRobot training-export episodes (src/replay/io/parquet_io.py):
 parquet = ["pyarrow"]
-# Re-encoding recorded joints into tokens offline (src/replay/encoder/encoder.py):
+# Re-encoding recorded joints into tokens offline (src/replay/encoder/):
 encode = ["onnxruntime", "pyarrow"]
-# The DDS state source additionally needs unitree_sdk2py (not on PyPI):
-#   uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
-# (--no-deps: it pins an old cyclonedds and pulls opencv-python; its IDL
-# types work fine with current cyclonedds and opencv-python-headless.)
 
 [build-system]
 requires = ["setuptools>=68"]
