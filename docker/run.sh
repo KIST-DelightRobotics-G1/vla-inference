@@ -3,17 +3,12 @@
 # kist-gearsonic-inference/docker/run.sh: the image is self-contained, reuse
 # the container across sessions until you `docker rm kist-vla-inference`.
 #
-#   --gpus all        local policy backend (torch cu128; host needs only the
-#                     NVIDIA driver + nvidia-container-toolkit)
 #   --network host    CycloneDDS discovery/multicast toward gearsonic
-#   --ipc host        torch shared-memory convention
 #
 # Mounts:
-#   <repo>/shared        -> /workspace/kist-vla-inference/shared
-#                           host<->container exchange dir (created here):
-#                           checkpoints, collector sessions, LeRobot exports
-#   ~/.cache/huggingface -> /data/huggingface
-#                           gated Cosmos backbone token + model cache
+#   <repo>/shared -> /workspace/kist-vla-inference/shared
+#                    host<->container exchange dir (created here):
+#                    collector sessions, LeRobot exports
 #
 # Iterative dev: add  -v "$(pwd)":/workspace/kist-vla-inference  to shadow the
 # baked source with your working copy (editable install picks it up).
@@ -29,11 +24,8 @@ elif [ "$(docker ps -aq -f name=^${CONTAINER}$)" ]; then
     exec docker exec -it "${CONTAINER}" /bin/bash
 fi
 
-mkdir -p "${REPO_ROOT}/shared" "$HOME/.cache/huggingface"
+mkdir -p "${REPO_ROOT}/shared"
 exec docker run -it --name "${CONTAINER}" \
-    --gpus all \
     --network host \
-    --ipc host \
     -v "${REPO_ROOT}/shared":/workspace/kist-vla-inference/shared \
-    -v "$HOME/.cache/huggingface":/data/huggingface \
     kist-vla-inference /bin/bash
