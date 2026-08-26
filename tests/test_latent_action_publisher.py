@@ -5,8 +5,8 @@ import time
 
 import numpy as np
 
-from replay.latent_action_publisher import LatentActionPublisher, publish_via
-from replay.timeline import ActionStream
+from replay.publisher import LatentActionPublisher, publish_via
+from replay.builder import ActionStream
 
 
 class FakeWriter:

@@ -11,7 +11,7 @@ The published stream is bracketed for safety:
 
     [lead-in]  safe standing token, so gearsonic claims VLA from a known pose
     [blend]    standing -> the session's first token
-    [replay]   the recorded tokens, gaps blended over (see replay/timeline/)
+    [replay]   the recorded tokens, gaps blended over (see replay/builder/)
     [blend]    the session's last token -> standing
     [lead-out] safe standing token, then the publisher stops
 
@@ -21,10 +21,10 @@ back to the origin) — safe, but from wherever the episode happened to stop.
 
 Usage:
     # Link check against the gearsonic probe (./build/vla_receiver_probe 42):
-    python scripts/replay_session.py sessions/20260824_141530 --domain 42
+    python scripts/replay_session.py --path sessions/20260824_141530 --domain 42
 
     # On the real robot (ROBOT MOVES — hang it first, VR e-stop in reach):
-    python scripts/replay_session.py sessions/20260824_141530 --domain 0
+    python scripts/replay_session.py --path sessions/20260824_141530 --domain 0
 
 WARNING: the recorded tokens are latents of the SONIC checkpoint that was
 running when the session was collected. Replaying them against a gearsonic
@@ -34,17 +34,23 @@ unsafe motion — the latent spaces are not comparable.
 
 import sys
 from dataclasses import dataclass
-from typing import Literal
 from pathlib import Path
 
 from common.config import DEFAULT_INITIAL_MOTION_TOKEN
 from common.cyclonedds.config import load_dds_config
 from common.g1_joints import OPEN_HAND_Q
 
-from .constants import ARBITER_TELEOP, CONTROL_DT_NS
-from .latent_action_publisher import LatentActionPublisher
-from .session import load_episode, load_reencoded_episode, load_session
-from .timeline import ActionStream, CompressedGapError, ReplayTimeline, bracket_timeline
+from .aligner import align_joints, align_tokens
+from .constants import CONTROL_DT_NS
+from .publisher import LatentActionPublisher
+from .io import csv_io, parquet_io
+from .builder import (
+    ActionStream,
+    CompressedGapError,
+    Timeline,
+    bracket_timeline,
+    build_timeline,
+)
 
 # Fixed path, gearsonic-style: the GEAR-SONIC encoder paired with the decoder
 # gearsonic runs (swap them together). The docker image downloads it at build.
@@ -53,23 +59,20 @@ ENCODER_ONNX = "models/model_encoder.onnx"
 
 @dataclass
 class Config:
-    session: str
+    path: str
     """What to replay: a collector session directory (contains
     motion_token.csv), a LeRobot training-export episode parquet, or a
     LeRobot dataset root (contains meta/info.json — pass --episode too)."""
 
     episode: int | None = None
-    """Episode index, when --session is a LeRobot dataset root."""
+    """Episode index, when --path is a LeRobot dataset root."""
 
-    tokens_from: Literal["recorded", "joints"] = "recorded"
-    """'recorded' publishes the episode's recorded motion tokens (latents of
-    the collection-time SONIC checkpoint). 'joints' RE-ENCODES the recorded
+    joints: bool = False
+    """Default publishes the episode's recorded motion tokens (latents of
+    the collection-time SONIC checkpoint). --joints RE-ENCODES the recorded
     whole-body joints through the SONIC encoder at models/model_encoder.onnx
-    (g1 mode) — checkpoint-portable, parquet episodes only."""
-
-    joint_source: Literal["state", "wbc"] = "state"
-    """--tokens-from joints only: 'state' encodes the measured joints (the
-    motion that actually happened), 'wbc' the commanded targets."""
+    (g1 mode) — checkpoint-portable. Parquet episodes encode observation.state;
+    collector CSV sessions encode lowstate.csv q+dq on the token grid."""
 
     config: str = "config/config.yaml"
     """Network settings (dds: domain_id, network_interface) — gearsonic-style.
@@ -78,14 +81,6 @@ class Config:
     domain: int | None = None
     """DDS domain id override (must match the gearsonic receiver). Default:
     the config file's dds.domain_id."""
-
-    teleop_only: bool = False
-    """Replay only arbiter_mode==1 (teleop demonstration) ticks — what the
-    training export keeps. Default replays every recorded tick."""
-
-    hand_source: Literal["cmd", "state", "none"] = "cmd"
-    """Hand targets: 'cmd' (hand_cmd_{side}.csv, the commanded targets),
-    'state' (hand_{side}.csv, measured), or 'none' (open hands)."""
 
     max_gap_ticks: int = 25
     """Longest gap (in 20 ms ticks) to blend across. A larger gap is
@@ -108,7 +103,16 @@ class Config:
     """Publish even when a gap had to be compressed."""
 
 
-def build_stream(timeline: ReplayTimeline, config: Config) -> ActionStream:
+def _require_encoder() -> None:
+    if not Path(ENCODER_ONNX).exists():
+        raise SystemExit(
+            f"{ENCODER_ONNX} not found — the docker image bakes it in; on a "
+            f"host checkout: wget -P models "
+            f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx"
+        )
+
+
+def build_stream(timeline: Timeline, config: Config) -> ActionStream:
     """Bracket the replay with the standing lead-in/out and the two blends."""
     rate = 1e9 / CONTROL_DT_NS
     return bracket_timeline(
@@ -123,58 +127,48 @@ def build_stream(timeline: ReplayTimeline, config: Config) -> ActionStream:
 
 
 def main(config: Config) -> None:
-    session = Path(config.session)
-    is_parquet = session.suffix == ".parquet" or (session / "meta" / "info.json").exists()
+    path = Path(config.path)
+    is_parquet = path.suffix == ".parquet" or (path / "meta" / "info.json").exists()
 
     if is_parquet:
-        # A training-export episode: already teleop-only, hands always from
-        # the recorded teleop targets (there is no measured-hand column).
-        if config.hand_source not in ("cmd",):
-            raise SystemExit(
-                f"--hand-source {config.hand_source} is a collector-session option; "
-                f"a LeRobot episode only carries the commanded teleop hand targets"
-            )
-        print(f"Episode: {session}" + (f" [{config.episode}]" if config.episode is not None else ""))
-        if config.tokens_from == "joints":
-            if not Path(ENCODER_ONNX).exists():
-                raise SystemExit(
-                    f"{ENCODER_ONNX} not found — the docker image bakes it in; on a "
-                    f"host checkout: wget -P models "
-                    f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx"
-                )
-            print(f"Re-encoding joints ({config.joint_source}) via {ENCODER_ONNX}")
-            timeline = load_reencoded_episode(
-                session,
-                ENCODER_ONNX,
-                episode_index=config.episode,
-                joint_source=config.joint_source,
-                max_hold_ticks=config.max_gap_ticks,
-            )
-        else:
-            timeline = load_episode(
-                session, episode_index=config.episode, max_hold_ticks=config.max_gap_ticks
-            )
+        print(f"Episode: {path}" + (f" [{config.episode}]" if config.episode is not None else ""))
+        if path.is_dir():
+            if config.episode is None:
+                raise SystemExit(f"{path} is a dataset root — pass --episode to pick one")
+            path = parquet_io.resolve_episode_path(path, config.episode)
+        tokens = parquet_io.read_tokens(path)
+        joints = parquet_io.read_joints(path) if config.joints else None
     else:
-        if config.tokens_from == "joints":
+        if config.episode is not None:
             raise SystemExit(
-                "--tokens-from joints needs a LeRobot parquet episode (the collector "
-                "CSV sessions carry no aligned whole-body joint stream)"
+                f"--episode is a LeRobot-dataset option; {path} is a collector "
+                f"session directory (motion_token.csv) and has no episodes"
             )
-        print(f"Session: {session}")
-        timeline = load_session(
-            session,
-            arbiter_modes=(ARBITER_TELEOP,) if config.teleop_only else None,
-            max_hold_ticks=config.max_gap_ticks,
-            hand_source=config.hand_source,
-        )
+        print(f"Session: {path}")
+        tokens = csv_io.read_tokens(path)
+        joints = csv_io.read_joints(path) if config.joints else None
+
+    # The align stage: every recorded side stream onto the token clock.
+    aligned = align_tokens(tokens)
+
+    if joints is not None:
+        # The encoding stage: replace the recorded token values with ones
+        # re-encoded from the joints (checkpoint portability).
+        from .encoder import encode_tokens_from_joints
+
+        _require_encoder()
+        print(f"Re-encoding joints via {ENCODER_ONNX}")
+        aligned = encode_tokens_from_joints(aligned, align_joints(tokens, joints), ENCODER_ONNX)
+
+    timeline = build_timeline(aligned, max_hold_ticks=config.max_gap_ticks)
     try:
         stream = build_stream(timeline, config)
     except CompressedGapError as e:
         print(
             f"\nRefusing to publish: {e}.\n"
             f"Either raise --max-gap-ticks (now {config.max_gap_ticks}) so the transition "
-            f"is spread over the whole gap instead, restrict the replay (--teleop-only), "
-            f"or pass --force if the faster ramp is acceptable."
+            f"is spread over the whole gap instead, or pass --force if the faster "
+            f"ramp is acceptable."
         )
         sys.exit(1)
 

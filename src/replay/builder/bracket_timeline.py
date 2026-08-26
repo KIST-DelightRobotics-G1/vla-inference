@@ -1,4 +1,4 @@
-"""Wrapping a timeline in the standing lead-in/out bracket.
+"""Wrapping a timeline in the standing bracket: Timeline -> ActionStream.
 
 This is the only way to obtain an `ActionStream`, so the compressed-gap
 safety gate lives here: a timeline whose gap fill was capped time-compresses
@@ -12,7 +12,7 @@ import numpy as np
 from ..constants import CONTROL_DT_NS, HAND_DIM, TOKEN_DIM
 from .action_stream import ActionStream
 from .blending import blend
-from .replay_timeline import ReplayTimeline
+from .timeline_builder import Timeline
 
 
 class CompressedGapError(ValueError):
@@ -23,7 +23,7 @@ class CompressedGapError(ValueError):
     pass `force=True`.
     """
 
-    def __init__(self, timeline: ReplayTimeline):
+    def __init__(self, timeline: Timeline):
         self.gaps = timeline.compressed_gaps
         worst = max(self.gaps, key=lambda g: g.ticks)
         super().__init__(
@@ -36,7 +36,7 @@ class CompressedGapError(ValueError):
 
 
 def bracket_timeline(
-    timeline: ReplayTimeline,
+    timeline: Timeline,
     standing_token: np.ndarray,
     open_hand: np.ndarray,
     *,

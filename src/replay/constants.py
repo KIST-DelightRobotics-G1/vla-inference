@@ -10,18 +10,12 @@ motion_token.csv).
 
 from common.cyclonedds.kist_msgs import CONTROL_DT_NS, HAND_DIM, TOKEN_DIM
 
-# ControlArbiter::Mode values, as recorded in motion_token.csv.
+# ControlArbiter::Mode values, as recorded in motion_token.csv's
+# arbiter_mode column (0=normal, 1=teleop, 2=vla, 3=recovering).
 ARBITER_NORMAL = 0
 ARBITER_TELEOP = 1
 ARBITER_VLA = 2
 ARBITER_RECOVERING = 3
-
-ARBITER_NAMES = {
-    ARBITER_NORMAL: "normal",
-    ARBITER_TELEOP: "teleop",
-    ARBITER_VLA: "vla",
-    ARBITER_RECOVERING: "recovering",
-}
 
 __all__ = [
     "CONTROL_DT_NS",
@@ -31,5 +25,4 @@ __all__ = [
     "ARBITER_TELEOP",
     "ARBITER_VLA",
     "ARBITER_RECOVERING",
-    "ARBITER_NAMES",
 ]

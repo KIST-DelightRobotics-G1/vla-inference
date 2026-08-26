@@ -1,21 +1,17 @@
-"""Recording readers for the replay pipeline.
+"""Recording readers: the file format dies here.
 
-    csv_io.py              collector session CSVs (motion_token.csv,
-                           hand[_cmd]_*.csv)
-    parquet_io.py          LeRobot training-export episodes (needs pyarrow,
-                           the [parquet] extra)
-    motion_token_rows.py   MotionTokenRows — the struct both readers produce,
-                           the contract with `timeline.build_timeline`
+    csv_io.py       collector session CSVs -> Tokens / Joints
+    parquet_io.py   LeRobot export episodes -> Tokens / Joints
+                    (needs pyarrow, the [parquet] extra)
+    tokens.py       Tokens — a recording's token content (+ hand streams)
+    joints.py       Joints — a recording's whole-body joint content
+
+Whatever the format, `read_tokens` returns a `Tokens` and `read_joints` a
+`Joints`; everything downstream (the encoding stage in
+`replay.encoder`, timeline, publish) knows only these two dataclasses.
 """
 
-from .csv_io import read_hand_csv, read_motion_token_csv
-from .motion_token_rows import MotionTokenRows
-from .parquet_io import read_episode_parquet, resolve_episode_path
+from .joints import Joints
+from .tokens import Tokens
 
-__all__ = [
-    "read_hand_csv",
-    "read_motion_token_csv",
-    "read_episode_parquet",
-    "resolve_episode_path",
-    "MotionTokenRows",
-]
+__all__ = ["Joints", "Tokens"]

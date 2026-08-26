@@ -10,16 +10,21 @@ import pytest
 
 from replay import (
     ARBITER_TELEOP,
-    ARBITER_VLA,
     CONTROL_DT_NS,
     CompressedGapError,
     bracket_timeline,
     build_timeline,
-    load_session,
-    read_hand_csv,
-    read_motion_token_csv,
 )
-from replay.timeline import align_by_recv_ns, blend
+from replay.aligner import align_by_recv_ns, align_tokens
+from replay.io.csv_io import read_hand_csv, read_tokens
+from replay.builder import blend
+
+
+def csv_timeline(session_dir, *, max_hold_ticks=25):
+    """Reader -> align -> build_timeline composition, as cli.main wires it."""
+    tokens = read_tokens(session_dir)
+    return build_timeline(align_tokens(tokens), max_hold_ticks=max_hold_ticks)
+
 
 T0 = 1_700_000_000_000_000_000  # arbitrary epoch-ns base
 
@@ -61,20 +66,20 @@ def write_hand_cmd_csv(path, *, rows, base_ns=T0, period_ns=CONTROL_DT_NS, value
 # ── CSV parsing ──────────────────────────────────────────────────────────────
 
 
-def test_read_motion_token_csv(tmp_path):
-    csv_path = tmp_path / "motion_token.csv"
-    write_motion_token_csv(csv_path, ticks=5)
-    rows = read_motion_token_csv(csv_path)
+def test_read_tokens_from_session_csvs(tmp_path):
+    write_motion_token_csv(tmp_path / "motion_token.csv", ticks=5)
+    tokens = read_tokens(tmp_path)
 
-    assert len(rows) == 5
-    assert rows.tokens.shape == (5, 64)
-    assert rows.tokens.dtype == np.float32
+    assert len(tokens) == 5
+    assert tokens.values.shape == (5, 64)
+    assert tokens.values.dtype == np.float32
     # token[i][j] == i + 0.001*j by construction
-    assert rows.tokens[3][0] == pytest.approx(3.0)
-    assert rows.tokens[3][10] == pytest.approx(3.01)
-    assert rows.seq.tolist() == [1, 2, 3, 4, 5]
-    assert (rows.arbiter_mode == ARBITER_TELEOP).all()
-    assert (rows.recv_ns > rows.stamp_ns).all()
+    assert tokens.values[3][0] == pytest.approx(3.0)
+    assert tokens.values[3][10] == pytest.approx(3.01)
+    assert tokens.seq.tolist() == [1, 2, 3, 4, 5]
+    assert (tokens.arbiter_mode == ARBITER_TELEOP).all()
+    assert (tokens.recv_ns > tokens.stamp_ns).all()
+    assert tokens.left_hand is None
 
 
 def test_read_hand_csv_picks_the_q_columns(tmp_path):
@@ -89,16 +94,14 @@ def test_read_hand_csv_picks_the_q_columns(tmp_path):
 
 
 def test_missing_column_is_a_clear_error(tmp_path):
-    csv_path = tmp_path / "motion_token.csv"
-    csv_path.write_text("recv_ns,stamp_ns,seq\n1,2,3\n")
+    (tmp_path / "motion_token.csv").write_text("recv_ns,stamp_ns,seq\n1,2,3\n")
     with pytest.raises(ValueError, match="missing expected column"):
-        read_motion_token_csv(csv_path)
+        read_tokens(tmp_path)
 
 
 def test_header_only_csv_yields_no_rows(tmp_path):
-    csv_path = tmp_path / "motion_token.csv"
-    write_motion_token_csv(csv_path, ticks=0)
-    assert len(read_motion_token_csv(csv_path)) == 0
+    write_motion_token_csv(tmp_path / "motion_token.csv", ticks=0)
+    assert len(read_tokens(tmp_path)) == 0
 
 
 # ── alignment / blending ─────────────────────────────────────────────────────
@@ -127,7 +130,7 @@ def test_blend_excludes_start_and_lands_on_end():
 
 def test_contiguous_session_is_one_tick_per_row(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=50)
-    timeline = load_session(tmp_path, hand_source="none")
+    timeline = csv_timeline(tmp_path)
 
     assert len(timeline) == 50
     assert timeline.recorded_ticks == 50
@@ -143,7 +146,7 @@ def test_contiguous_session_is_one_tick_per_row(tmp_path):
 def test_gap_is_blended_across_and_reported(tmp_path):
     # ticks 10..13 missing -> a 4-tick hole between seq 10 and seq 15
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=20, skip=(10, 11, 12, 13))
-    timeline = load_session(tmp_path, hand_source="none")
+    timeline = csv_timeline(tmp_path)
 
     assert len(timeline) == 20  # the hole is filled, so the grid is intact
     assert timeline.recorded_ticks == 16
@@ -161,7 +164,7 @@ def test_gap_is_blended_across_and_reported(tmp_path):
 
 def test_long_gap_is_compressed_and_flagged(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=200, skip=tuple(range(10, 110)))
-    timeline = load_session(tmp_path, hand_source="none", max_hold_ticks=25)
+    timeline = csv_timeline(tmp_path, max_hold_ticks=25)
 
     gap = timeline.gaps[0]
     assert gap.ticks == 100
@@ -176,32 +179,10 @@ def test_long_gap_is_compressed_and_flagged(tmp_path):
 def test_stamp_jitter_still_lands_one_row_per_tick(tmp_path):
     # +-5ms jitter on a 20ms grid: rounding must not create or drop ticks
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=100, stamp_jitter_ns=5_000_000)
-    timeline = load_session(tmp_path, hand_source="none")
+    timeline = csv_timeline(tmp_path)
 
     assert len(timeline) == 100
     assert timeline.gaps == []
-
-
-def test_teleop_only_filter(tmp_path):
-    csv_path = tmp_path / "motion_token.csv"
-    write_motion_token_csv(csv_path, ticks=10, arbiter_mode=ARBITER_TELEOP)
-    rows = read_motion_token_csv(csv_path)
-    rows.arbiter_mode[5:] = ARBITER_VLA
-
-    kept = build_timeline(rows, arbiter_modes=(ARBITER_TELEOP,))
-    assert kept.recorded_ticks == 5
-    assert kept.arbiter_modes == {ARBITER_TELEOP: 5}
-
-    both = build_timeline(rows)
-    assert both.arbiter_modes == {ARBITER_TELEOP: 5, ARBITER_VLA: 5}
-
-
-def test_filter_that_keeps_nothing_names_the_modes_present(tmp_path):
-    csv_path = tmp_path / "motion_token.csv"
-    write_motion_token_csv(csv_path, ticks=4, arbiter_mode=ARBITER_VLA)
-    rows = read_motion_token_csv(csv_path)
-    with pytest.raises(ValueError, match=r"modes \[2\].*vla"):
-        build_timeline(rows, arbiter_modes=(ARBITER_TELEOP,))
 
 
 def test_hand_commands_align_by_recv_ns(tmp_path):
@@ -210,10 +191,11 @@ def test_hand_commands_align_by_recv_ns(tmp_path):
     write_hand_cmd_csv(tmp_path / "hand_cmd_left.csv", rows=10, period_ns=2 * CONTROL_DT_NS)
     write_hand_cmd_csv(tmp_path / "hand_cmd_right.csv", rows=10, period_ns=2 * CONTROL_DT_NS,
                        value=-1.0)
-    timeline = load_session(tmp_path, hand_source="cmd")
+    aligned = align_tokens(read_tokens(tmp_path))
+    timeline = build_timeline(aligned)
 
-    assert timeline.hands_from == "cmd"
-    assert timeline.hand_ticks_before_first == 0
+    assert aligned.hands_from == "cmd"
+    assert aligned.hand_ticks_before_first == 0
     # token ticks 0,1 both fall on hand row 0 (value 1.0); ticks 2,3 on row 1 (2.0)
     assert timeline.left_hand[0][0] == pytest.approx(1.0)
     assert timeline.left_hand[1][0] == pytest.approx(1.0)
@@ -225,15 +207,15 @@ def test_hands_starting_late_are_clamped_and_counted(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=20)
     # first hand command arrives 5 ticks into the session
     write_hand_cmd_csv(tmp_path / "hand_cmd_left.csv", rows=10, base_ns=T0 + 5 * CONTROL_DT_NS)
-    timeline = load_session(tmp_path, hand_source="cmd")
+    aligned = align_tokens(read_tokens(tmp_path))
 
-    assert timeline.hand_ticks_before_first == 5
-    assert timeline.left_hand[0][0] == pytest.approx(1.0)  # clamped to the first row
+    assert aligned.hand_ticks_before_first == 5
+    assert aligned.left_hand[0][0] == pytest.approx(1.0)  # clamped to the first row
 
 
 def test_missing_hand_csv_degrades_to_open_hands(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=10)
-    timeline = load_session(tmp_path, hand_source="cmd")
+    timeline = csv_timeline(tmp_path)
 
     assert not timeline.left_hand.any()
     assert not timeline.right_hand.any()
@@ -241,19 +223,13 @@ def test_missing_hand_csv_degrades_to_open_hands(tmp_path):
 
 def test_session_without_motion_token_csv_says_why(tmp_path):
     with pytest.raises(FileNotFoundError, match="motion_token.enabled"):
-        load_session(tmp_path)
+        csv_timeline(tmp_path)
 
 
 def test_empty_token_stream_is_rejected(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=0)
     with pytest.raises(ValueError, match="no rows"):
-        load_session(tmp_path)
-
-
-def test_bad_hand_source_is_rejected(tmp_path):
-    write_motion_token_csv(tmp_path / "motion_token.csv", ticks=5)
-    with pytest.raises(ValueError, match="hand_source"):
-        load_session(tmp_path, hand_source="measured")
+        csv_timeline(tmp_path)
 
 
 # ── bracketing ───────────────────────────────────────────────────────────────
@@ -261,7 +237,7 @@ def test_bad_hand_source_is_rejected(tmp_path):
 
 def test_bracket_wraps_the_timeline_in_standing_lead_and_blends(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=10)
-    timeline = load_session(tmp_path, hand_source="none")
+    timeline = csv_timeline(tmp_path)
 
     standing = np.full(64, 5.0, dtype=np.float32)
     open_hand = np.zeros(7, dtype=np.float32)
@@ -294,7 +270,7 @@ def test_bracket_refuses_compressed_gaps_unless_forced(tmp_path):
     # A 30-tick hole capped at 5 fill ticks -> compressed gap: the only way
     # to an ActionStream must be an explicit force, at every call site.
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=40, skip=range(5, 35))
-    timeline = load_session(tmp_path, hand_source="none", max_hold_ticks=5)
+    timeline = csv_timeline(tmp_path, max_hold_ticks=5)
     assert timeline.compressed_gaps and timeline.compressed_gaps[0].ticks == 30
 
     standing = np.zeros(64, dtype=np.float32)
@@ -314,7 +290,7 @@ def test_bracket_refuses_compressed_gaps_unless_forced(tmp_path):
 
 def test_bracket_with_zero_lead_is_just_the_timeline(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=6)
-    timeline = load_session(tmp_path, hand_source="none")
+    timeline = csv_timeline(tmp_path)
     stream = bracket_timeline(
         timeline,
         np.zeros(64, dtype=np.float32),
@@ -328,7 +304,7 @@ def test_bracket_with_zero_lead_is_just_the_timeline(tmp_path):
 
 def test_bracket_rejects_a_wrong_sized_standing_token(tmp_path):
     write_motion_token_csv(tmp_path / "motion_token.csv", ticks=4)
-    timeline = load_session(tmp_path, hand_source="none")
+    timeline = csv_timeline(tmp_path)
     with pytest.raises(ValueError, match="standing_token must have 64"):
         bracket_timeline(
             timeline, np.zeros(32), np.zeros(7),

@@ -16,48 +16,38 @@ open-loop joint playback.
 
 Layout:
 
-    io/           recording readers (csv_io: collector sessions, parquet_io:
-                  LeRobot export episodes — needs pyarrow, the [parquet]
-                  extra) and their output struct (MotionTokenRows)
-    timeline/     20 ms grid resampling, gap blending, the safety gate +
-                  standing bracket, and its products (ReplayTimeline,
-                  ActionStream)
-    latent_action_step.py
-                  one publish tick — the pure-Python twin of the DDS wire
-                  struct, yielded by iterating an ActionStream
-    latent_action_publisher.py
-                  the execution layer: owns the DDS channel and the Tx
+    io/           recording readers — csv_io (collector sessions) and
+                  parquet_io (LeRobot episodes) both return the same Tokens
+                  / Joints dataclasses: the file format dies in io/
+    aligner/      cross-stream joins onto the token clock — raw hand and
+                  joint streams become one row per tick (AlignedTokens,
+                  AlignedJoints): cross-stream time dies in aligner/
+    encoder/      the encoding stage: AlignedJoints -> EncodedTokens through
+                  the SONIC encoder ONNX (checkpoint portability)
+    builder/      20 ms grid resampling, gap blending, the safety gate +
+                  standing bracket; its contract with the publisher is the
+                  ActionStream, iterable as LatentActionSteps (the
+                  pure-Python twin of the DDS wire struct)
+    publisher/    the execution stage: owns the DDS channel and the Tx
                   worker thread, puts an ActionStream on
                   rt/kist/latent_action at 50 Hz (main thread = lifecycle)
-    session.py    session directory / episode parquet -> ReplayTimeline
     cli.py        the entry point (`scripts/replay_session.py` /
                   `python -m replay`): Config + load -> bracket -> publish
 """
 
 # Public surface = names external code actually references. Internal types
-# and primitives (MotionTokenRows, ReplayTimeline, ActionStream, Gap, blend,
-# ...) stay importable from their subpackages (replay.io, replay.timeline).
-from .constants import ARBITER_TELEOP, ARBITER_VLA, CONTROL_DT_NS, TOKEN_DIM
-from .io import (
-    read_episode_parquet,
-    read_hand_csv,
-    read_motion_token_csv,
-    resolve_episode_path,
-)
-from .session import load_episode, load_session
-from .timeline import CompressedGapError, bracket_timeline, build_timeline
+# and primitives (Timeline, ActionStream, Gap, blend, read_* functions,
+# ...) stay importable from their subpackages (replay.io, replay.builder).
+from .constants import ARBITER_TELEOP, CONTROL_DT_NS, TOKEN_DIM
+from .io import Joints, Tokens
+from .builder import CompressedGapError, bracket_timeline, build_timeline
 
 __all__ = [
     "ARBITER_TELEOP",
-    "ARBITER_VLA",
     "CONTROL_DT_NS",
     "TOKEN_DIM",
-    "read_hand_csv",
-    "read_motion_token_csv",
-    "read_episode_parquet",
-    "resolve_episode_path",
-    "load_episode",
-    "load_session",
+    "Joints",
+    "Tokens",
     "CompressedGapError",
     "bracket_timeline",
     "build_timeline",

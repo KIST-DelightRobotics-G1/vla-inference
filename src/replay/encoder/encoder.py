@@ -1,12 +1,13 @@
-"""Third reader: recorded joints -> SONIC tokens via the offline encoder.
+"""Joints -> SONIC tokens: the offline encoding transform (g1 mode 0).
 
-Re-encodes a LeRobot episode's whole-body joints into motion tokens with the
-GEAR-SONIC encoder (g1 mode 0), producing the same `(MotionTokenRows, hands)`
-the other readers do — so gaps, gate, bracket, and publisher are all shared,
-and gearsonic needs no change. Unlike the recorded tokens (which are latents
-of the SONIC checkpoint that ran at collection time), these tokens come from
-whatever encoder ONNX you pass — re-encoding is how a session survives a
-decoder-checkpoint change.
+Pure computation — no file I/O, no time handling. The align stage supplies
+`AlignedTokens` and `AlignedJoints` on one shared clock; this module turns
+the joints into replacement token values with the GEAR-SONIC encoder ONNX.
+Unlike the recorded tokens
+(latents of the SONIC checkpoint that ran at collection time), these come
+from whatever encoder you pass — re-encoding is how a recording survives a
+decoder-checkpoint change (swap the encoder together with gearsonic's
+decoder).
 
 The observation assembly is a line-for-line port of gearsonic's
 ``src/control/token_encoder.cpp`` ``fill_obs()`` (g1 branch) and
@@ -21,9 +22,7 @@ both initial quaternions are the same sample and the alignment is exactly
 identity — the anchor reduces to ``conj(q_t) * q_tf`` (rotation from the
 current base to the future frame's base).
 
-Requires ``onnxruntime`` (the ``[encode]`` extra); imported lazily. The
-encoder model is ``model_encoder.onnx`` from the public GEAR-SONIC HF repo —
-it must be the encoder PAIRED with the decoder gearsonic runs.
+Requires ``onnxruntime`` (the ``[encode]`` extra); imported lazily.
 """
 
 from pathlib import Path
@@ -31,8 +30,6 @@ from pathlib import Path
 import numpy as np
 
 from ..constants import CONTROL_DT_NS, TOKEN_DIM
-from .motion_token_rows import MotionTokenRows
-from .parquet_io import read_episode_parquet
 
 # ── encoder input layout (token_encoder.cpp offsets, g1 mode) ────────────────
 ENCODER_INPUT_DIM = 1762
@@ -53,12 +50,6 @@ MUJOCO_TO_ISAACLAB = np.array(
      11, 15, 19, 21, 23, 25, 27, 12, 16, 20, 22, 24, 26, 28],
     dtype=np.int64,
 )
-
-# The 29 body joints inside the recording's 43-dim state/wbc vectors
-# (modality order: legs 0:12, waist 12:15, left_arm 15:22, left_hand 22:29,
-# right_arm 29:36, right_hand 36:43) — hands excluded, MuJoCo order kept.
-BODY_IN_STATE43 = np.array(list(range(0, 22)) + list(range(29, 36)), dtype=np.int64)
-
 
 def _quat_conjugate(q: np.ndarray) -> np.ndarray:
     return q * np.array([1.0, -1.0, -1.0, -1.0])
@@ -98,28 +89,38 @@ def _quat_to_first_two_columns(q: np.ndarray) -> np.ndarray:
 
 
 def assemble_encoder_obs(
-    q_mujoco: np.ndarray, base_quat: np.ndarray, *, dt: float = CONTROL_DT_NS / 1e9
+    q_mujoco: np.ndarray,
+    base_quat: np.ndarray,
+    *,
+    dq_mujoco: np.ndarray | None = None,
+    dt: float = CONTROL_DT_NS / 1e9,
 ) -> np.ndarray:
     """Recorded joints + base quats -> encoder obs_dict rows (T, 1762).
 
     Args:
         q_mujoco: (T, 29) joint positions, MuJoCo/Unitree order (rad).
         base_quat: (T, 4) pelvis quaternion, wxyz.
+        dq_mujoco: (T, 29) measured joint velocities (lowstate m*_dq) — when
+            None (parquet episodes carry no velocities) the central finite
+            difference of the positions is used instead.
         dt: recording tick period (50 Hz).
 
     Per tick t the 10 "future" frames are t, t+5, ..., t+45, clamped to the
     last tick (hold final pose) — exactly `target_frame()` with playing=true.
-    Velocities are the central finite difference of the positions.
     """
     q_mujoco = np.asarray(q_mujoco, dtype=np.float64)
     base_quat = np.asarray(base_quat, dtype=np.float64)
     T = len(q_mujoco)
     assert q_mujoco.shape == (T, NUM_BODY_JOINTS) and base_quat.shape == (T, 4)
 
-    # MuJoCo -> IsaacLab order (scatter), then finite-difference velocities.
+    # MuJoCo -> IsaacLab order (scatter); velocities measured or derived.
     q_isaac = np.empty_like(q_mujoco)
     q_isaac[:, MUJOCO_TO_ISAACLAB] = q_mujoco
-    dq_isaac = np.gradient(q_isaac, dt, axis=0)
+    if dq_mujoco is not None:
+        dq_isaac = np.empty_like(q_isaac)
+        dq_isaac[:, MUJOCO_TO_ISAACLAB] = np.asarray(dq_mujoco, dtype=np.float64)
+    else:
+        dq_isaac = np.gradient(q_isaac, dt, axis=0)
 
     # Future-frame index grid: (T, NUM_FRAMES), clamped.
     t_idx = np.arange(T)[:, None] + np.arange(NUM_FRAMES)[None, :] * FRAME_STEP
@@ -141,6 +142,20 @@ def assemble_encoder_obs(
         _quat_to_first_two_columns(base_to_ref).reshape(T, -1).astype(np.float32)
     )
     return obs
+
+
+def encode_joints(
+    encoder,
+    q_mujoco: np.ndarray,
+    base_quat: np.ndarray,
+    *,
+    dq_mujoco: np.ndarray | None = None,
+) -> np.ndarray:
+    """Joints -> (T, 64) tokens: obs assembly + the encoder in one step."""
+    if isinstance(encoder, (str, Path)):
+        encoder = load_onnx_encoder(encoder)
+    obs = assemble_encoder_obs(q_mujoco, base_quat, dq_mujoco=dq_mujoco)
+    return np.asarray(encoder(obs), dtype=np.float32).reshape(-1, TOKEN_DIM)
 
 
 def load_onnx_encoder(onnx_path: str | Path):
@@ -166,48 +181,33 @@ def load_onnx_encoder(onnx_path: str | Path):
     return encode
 
 
-def encode_episode_joints(
-    path: str | Path,
-    encoder,
-    *,
-    joint_source: str = "state",
-) -> tuple[MotionTokenRows, dict[str, tuple[np.ndarray, np.ndarray]]]:
-    """Re-encode one episode's joints into tokens; same shapes as the readers.
+def encode_tokens_from_joints(tokens, joints, encoder) -> "EncodedTokens":
+    """The encoding stage: a new `EncodedTokens` whose values are re-encoded
+    from `joints` (g1 mode) — checkpoint portability.
 
-    Args:
-        path: one `episode_XXXXXX.parquet`.
-        encoder: callable (N, 1762) -> (N, 64) (see `load_onnx_encoder`), or
-            an ONNX path handed to it.
-        joint_source: "state" (measured — the motion that actually happened,
-            default) or "wbc" (the commanded targets).
-
-    Returns `(rows, hands)` exactly like `read_episode_parquet`, with
-    `rows.tokens` replaced by the re-encoded ones.
+    Both inputs are the align stage's products, already on the same clock:
+    `tokens` (`AlignedTokens`) contributes the grid, seq, modes, and hand
+    rows unchanged; `joints` (`AlignedJoints`, 1:1 with the ticks) is the
+    material the new values are encoded from. Pure encoding — no time
+    handling here.
     """
-    if isinstance(encoder, (str, Path)):
-        encoder = load_onnx_encoder(encoder)
+    from .encoded_tokens import EncodedTokens
 
-    # Timestamps / seq / hands come from the normal parquet reader; only the
-    # tokens are replaced.
-    rows, hands = read_episode_parquet(path)
+    if len(joints) != len(tokens):
+        raise ValueError(
+            f"joints are not aligned to these tokens: {len(joints)} joint rows "
+            f"vs {len(tokens)} ticks — run replay.aligner.align_joints first"
+        )
 
-    column = {"state": "observation.state", "wbc": "action.wbc"}.get(joint_source)
-    if column is None:
-        raise ValueError(f"joint_source must be 'state' or 'wbc', got {joint_source!r}")
-
-    import pyarrow.parquet as pq
-
-    table = pq.read_table(path, columns=[column, "observation.root_orientation"])
-    state43 = np.asarray(table[column].to_pylist(), dtype=np.float64)
-    base_quat = np.asarray(
-        table["observation.root_orientation"].to_pylist(), dtype=np.float64
+    return EncodedTokens(
+        recv_ns=tokens.recv_ns,
+        stamp_ns=tokens.stamp_ns,
+        seq=tokens.seq,
+        arbiter_mode=tokens.arbiter_mode,
+        encoder_mode=tokens.encoder_mode,
+        values=encode_joints(encoder, joints.q, joints.base_quat, dq_mujoco=joints.dq),
+        left_hand=tokens.left_hand,
+        right_hand=tokens.right_hand,
+        hands_from=tokens.hands_from,
+        hand_ticks_before_first=tokens.hand_ticks_before_first,
     )
-
-    q_mujoco = state43[:, BODY_IN_STATE43]
-    obs = assemble_encoder_obs(q_mujoco, base_quat)
-    tokens = np.asarray(encoder(obs), dtype=np.float32).reshape(-1, TOKEN_DIM)
-    if len(tokens) != len(rows):
-        raise ValueError(f"encoder returned {len(tokens)} tokens for {len(rows)} ticks")
-
-    rows.tokens = tokens
-    return rows, hands

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..constants import CONTROL_DT_NS, HAND_DIM, TOKEN_DIM
-from ..latent_action_step import LatentActionStep
+from .latent_action_step import LatentActionStep
 
 
 @dataclass(frozen=True)

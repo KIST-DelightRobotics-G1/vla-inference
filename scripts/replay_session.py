@@ -7,10 +7,10 @@ docstring for the stream layout and safety notes). Equivalent to
 
 Usage:
     # Link check against the gearsonic probe (./build/vla_receiver_probe 42):
-    python scripts/replay_session.py sessions/20260824_141530 --domain 42
+    python scripts/replay_session.py --path sessions/20260824_141530 --domain 42
 
     # On the real robot (ROBOT MOVES — hang it first, VR e-stop in reach):
-    python scripts/replay_session.py sessions/20260824_141530 --domain 0
+    python scripts/replay_session.py --path sessions/20260824_141530 --domain 0
 """
 
 import tyro

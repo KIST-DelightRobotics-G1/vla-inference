@@ -259,10 +259,10 @@ replay, not an open-loop joint playback.
 
 ```bash
 # Against the gearsonic probe (./build/vla_receiver_probe 42)
-python scripts/replay_session.py --session <session-dir> --domain 42
+python scripts/replay_session.py --path <session-dir> --domain 42
 
 # On the real robot — ROBOT MOVES, hang it first
-python scripts/replay_session.py --session <session-dir> --domain 0
+python scripts/replay_session.py --path <session-dir> --domain 0
 ```
 
 DDS network settings live in `config/config.yaml` (gearsonic-style:
@@ -275,8 +275,7 @@ the episode does not end mid-motion. `motion_token.csv` rows exist only for
 ticks that decoded a token, so `seq`/`stamp_ns` gaps (INIT ramp, damping,
 e-stop) are resampled onto a strict 20 ms grid and blended across; a gap longer
 than `--max-gap-ticks` (0.5 s) is reported and aborts the run unless `--force`
-is given. `--teleop-only` restricts the replay to `arbiter_mode == 1`, the
-segments the training export keeps. The implementation is the
+is given. The implementation is the
 `src/replay/` package (also runnable as `python -m replay`):
 session loading is pure data handling with no DDS — `tests/test_replay.py`
 pins it against the collector's CSV schemas — and only `cli.py` touches the
@@ -289,30 +288,35 @@ record:
 
 ```bash
 # By dataset root + episode index, or by the parquet file directly:
-python scripts/replay_session.py --session <dataset-dir> --episode 3 --domain 42
-python scripts/replay_session.py --session <dataset-dir>/data/chunk-000/episode_000003.parquet --domain 42
+python scripts/replay_session.py --path <dataset-dir> --episode 3 --domain 42
+python scripts/replay_session.py --path <dataset-dir>/data/chunk-000/episode_000003.parquet --domain 42
 ```
 
 #### Joint re-encoding (checkpoint-portable replay)
 
-`--tokens-from joints` ignores the recorded tokens and RE-ENCODES the
-episode's recorded whole-body joints through the SONIC encoder at the fixed
-path `models/model_encoder.onnx` (g1 mode — the offline port of gearsonic's
-`token_encoder.cpp` `fill_obs()`, see `src/replay/io/joint_encoder.py`).
+`--joints` ignores the recorded tokens and RE-ENCODES the
+recording's whole-body joints through the SONIC encoder at the fixed path
+`models/model_encoder.onnx` (g1 mode — the offline port of gearsonic's
+`token_encoder.cpp` `fill_obs()`, see `src/replay/encoder/encoder.py`).
+Works for both input kinds: a parquet episode encodes `observation.state`
+(finite-difference velocities); a collector CSV session encodes
+`lowstate.csv` q + measured dq, aligned onto the motion_token grid.
 The docker image bakes the encoder in (same convention as gearsonic's
 `models/`); a host checkout fetches it once with
 `wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx`
 and needs `uv pip install -e ".[encode]"`:
 
 ```bash
-python scripts/replay_session.py --session <dataset-dir> --episode 1 --domain 42 \
-    --tokens-from joints
+python scripts/replay_session.py --path <dataset-dir> --episode 1 --domain 42 \
+    --joints
 ```
 
 This is how a session survives a decoder-checkpoint change: the recorded
 latents don't transfer, but the joints do, through the NEW checkpoint's
 paired encoder (swap `models/model_encoder.onnx` together with gearsonic's
-decoder). `--joint-source state` (measured, default) or `wbc` (commanded).
+decoder). The encoder input is the measured joints (`observation.state` /
+`lowstate.csv`) — the motion that actually happened; re-encoding the WBC
+commanded targets instead was validated to diverge (cosine 0.56).
 Verified against a real episode: re-encoded (g1-mode) vs recorded
 (teleop-mode) tokens agree at median per-tick cosine 0.95 on the same
 checkpoint.

@@ -28,7 +28,7 @@ dev = ["pytest"]
 dds = ["cyclonedds", "av"]
 # Replaying LeRobot training-export episodes (src/replay/io/parquet_io.py):
 parquet = ["pyarrow"]
-# Re-encoding recorded joints into tokens offline (src/replay/io/joint_encoder.py):
+# Re-encoding recorded joints into tokens offline (src/replay/encoder/encoder.py):
 encode = ["onnxruntime", "pyarrow"]
 # The DDS state source additionally needs unitree_sdk2py (not on PyPI):
 #   uv pip install --no-deps -e ~/GR00T-WholeBodyControl/external_dependencies/unitree_sdk2_python
@@ -41,7 +41,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["common", "common.cyclonedds", "replay", "replay.io", "replay.timeline", "vla"]
+packages = ["common", "common.cyclonedds", "replay", "replay.aligner", "replay.builder", "replay.encoder", "replay.io", "replay.publisher", "vla"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

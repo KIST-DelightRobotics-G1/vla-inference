@@ -1,5 +1,5 @@
 # Network configuration for the KIST VLA / replay publishers.
-# Loaded by src/common/dds_config.py; CLI flags override these values.
+# Loaded by src/common/cyclonedds/config.py; CLI flags override these values.
 
 dds:
   # DDS domain id (must match the gearsonic receiver; 0 = real robot,
