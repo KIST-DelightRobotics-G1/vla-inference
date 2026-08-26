@@ -79,11 +79,8 @@ stop).
 #### Session replay
 
 Replays a [kist-data-collector](https://github.com/Safety-Node/kist-data-collector)
-session: its `motion_token.csv` is a copy of the token gearsonic's decoder
-consumed on each CONTROL tick, and `hand_cmd_{side}.csv` carries the
-commanded hand targets. A LeRobot training-export episode replays the same
-way — its `action.motion_token` / `teleop.*_hand_joints` columns carry the
-same quantities:
+session (`motion_token.csv` + `hand_cmd_{side}.csv`) or a LeRobot
+training-export episode — both carry the same quantities:
 
 ```bash
 # Collector session directory:
@@ -94,36 +91,18 @@ python scripts/replay_session.py --path <dataset-dir> --episode 3
 python scripts/replay_session.py --path <dataset-dir>/data/chunk-000/episode_000003.parquet
 ```
 
-The published stream is bracketed — standing lead-in, crossfade, replay,
-crossfade, standing lead-out — so gearsonic claims VLA from a known pose and
-the episode does not end mid-motion. Recording gaps (INIT ramp, damping,
-e-stop) are resampled onto a strict 20 ms grid and blended across; a gap
-longer than `--max-gap-ticks` (0.5 s) is reported and aborts the run unless
-`--force` is given.
+The stream is bracketed with a standing lead-in/out and crossfades;
+recording gaps are blended across on the 20 ms grid, and a gap longer than
+`--max-gap-ticks` (0.5 s) aborts the run unless `--force` is given.
 
 #### Joint re-encoding (checkpoint-portable replay)
 
-`--joints` ignores the recorded tokens and RE-ENCODES the recording's
-whole-body joints through the SONIC encoder at the fixed path
-`models/model_encoder.onnx` (g1 mode — the offline port of gearsonic's
-`token_encoder.cpp` `fill_obs()`, see `src/replay/encoder/`):
+The recorded tokens are latents of the collection-time SONIC checkpoint —
+against a different decoder checkpoint they produce a different, possibly
+unsafe motion. `--joints` replays across checkpoint changes: it re-encodes
+the recording's measured joints through the paired encoder at
+`models/model_encoder.onnx` (swap it together with gearsonic's decoder):
 
 ```bash
 python scripts/replay_session.py --path <dataset-dir> --episode 1 --joints
 ```
-
-This is how a session survives a decoder-checkpoint change: the recorded
-latents don't transfer, but the joints do, through the NEW checkpoint's
-paired encoder (swap `models/model_encoder.onnx` together with gearsonic's
-decoder). The encoder input is the measured joints (`observation.state` /
-`lowstate.csv`) — the motion that actually happened; re-encoding the WBC
-commanded targets instead was validated to diverge (median per-tick cosine
-0.56 vs 0.95 for measured, on the same checkpoint). Hands always replay the
-commanded targets: hand values are not latents, transfer across checkpoints
-as-is, and commands carry the grip force that measured positions lose.
-
-**The recorded tokens are latents of the SONIC checkpoint that was running
-when the session was collected.** Replaying them against a gearsonic built
-on a different SONIC decoder checkpoint produces a different, possibly
-unsafe motion — the two latent spaces are not comparable. Use `--joints`
-across checkpoint changes.
