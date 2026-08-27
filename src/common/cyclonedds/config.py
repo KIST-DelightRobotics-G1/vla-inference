@@ -1,15 +1,13 @@
-"""DDS network settings from config/config.yaml (gearsonic-style).
+"""DDS network settings: config/config.yaml + config/cyclonedds.xml.
 
-The C++ peers configure DDS the same way — gearsonic's config.yaml carries
-`domain_id` + `network_interface`, ext-sensor-io routes the interface through
-CycloneDDS XML. Python's cyclonedds has no ChannelFactory::Init(domain,
-interface), so the interface is applied the ext-sensor-io way: an inline
-CycloneDDS XML document in the CYCLONEDDS_URI environment variable, set
-*before* the first DomainParticipant is created.
+Same convention as kist-ext-sensor-io: the yaml keeps the domain id and
+points at a CycloneDDS XML file that carries every transport setting (the
+network interface, the socket-buffer tuning). `apply_cyclonedds_xml` routes
+that file to CycloneDDS through the CYCLONEDDS_URI environment variable,
+which must happen *before* the process creates its first DomainParticipant.
 
-An already-set CYCLONEDDS_URI wins over the yaml — an operator exporting a
-full XML config (socket buffers, tracing, ...) must not be silently
-overridden by the interface-only snippet.
+An already-set CYCLONEDDS_URI wins — an operator exporting their own config
+must not be silently overridden.
 """
 
 import os
@@ -24,7 +22,7 @@ class DdsConfig:
     """The `dds:` section of config/config.yaml."""
 
     domain_id: int = 0
-    network_interface: str = ""  # "" = let CycloneDDS pick
+    cyclonedds_xml: str = "config/cyclonedds.xml"
 
 
 def load_dds_config(path: str | Path = DEFAULT_CONFIG_PATH) -> DdsConfig:
@@ -46,30 +44,29 @@ def load_dds_config(path: str | Path = DEFAULT_CONFIG_PATH) -> DdsConfig:
     dds = data.get("dds") or {}
     return DdsConfig(
         domain_id=int(dds.get("domain_id", DdsConfig.domain_id)),
-        network_interface=str(dds.get("network_interface", "") or ""),
+        cyclonedds_xml=str(dds.get("cyclonedds_xml", DdsConfig.cyclonedds_xml)),
     )
 
 
-def apply_network_interface(interface: str) -> bool:
-    """Point CycloneDDS at `interface` via CYCLONEDDS_URI (inline XML).
+def apply_cyclonedds_xml(path: str | Path) -> bool:
+    """Point CYCLONEDDS_URI at the transport config file.
 
-    Returns True when applied. No-ops (False) when `interface` is empty or
-    CYCLONEDDS_URI is already set — the environment is the operator's
-    explicit choice and takes precedence. Must run before the process
-    creates its first DomainParticipant; CycloneDDS reads the URI once.
+    Returns True when applied. No-ops (False) when CYCLONEDDS_URI is already
+    set (the environment is the operator's explicit choice) or when the
+    default-path file is absent (fresh checkout — CycloneDDS then runs on
+    its own defaults); an explicitly configured path must exist. Must run
+    before the process creates its first DomainParticipant; CycloneDDS
+    reads the URI once.
     """
-    if not interface:
-        return False
     if os.environ.get("CYCLONEDDS_URI"):
-        print(
-            f"CYCLONEDDS_URI already set — ignoring network_interface "
-            f"'{interface}' from the yaml"
-        )
+        print(f"CYCLONEDDS_URI already set — ignoring {path}")
         return False
+    path = Path(path)
+    if not path.exists():
+        if str(path) == DdsConfig.cyclonedds_xml:
+            return False
+        raise FileNotFoundError(f"{path} not found")
 
-    os.environ["CYCLONEDDS_URI"] = (
-        "<CycloneDDS><Domain Id=\"any\"><General><Interfaces>"
-        f"<NetworkInterface name=\"{interface}\" priority=\"default\" multicast=\"default\"/>"
-        "</Interfaces></General></Domain></CycloneDDS>"
-    )
+    os.environ["CYCLONEDDS_URI"] = f"file://{path.resolve()}"
     return True
+

@@ -1,4 +1,4 @@
-"""Frame — one decoded camera image, the camera subscriber's product."""
+"""ColorFrame — one decoded camera image, the camera subscriber's product."""
 
 from dataclasses import dataclass
 
@@ -6,7 +6,7 @@ import numpy as np
 
 
 @dataclass(frozen=True)
-class Frame:
+class ColorFrame:
     """The newest decoded image of one camera view.
 
     `stamp_ns` is the sensor-side capture stamp (ext-sensor-io's clock);

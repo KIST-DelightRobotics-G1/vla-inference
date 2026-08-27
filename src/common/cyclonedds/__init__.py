@@ -3,7 +3,7 @@
 Everything that touches CycloneDDS lives here:
 
     config.py        config/config.yaml `dds:` section (domain_id,
-                     network_interface via CYCLONEDDS_URI) — gearsonic-style
+                     config/cyclonedds.xml via CYCLONEDDS_URI) — gearsonic-style
     kist_msgs.py     the wire contract: the `module kist_msgs` mirror of
                      idl/kist_latent_action.idl (topics, IdlStructs, QoS;
                      keep in sync) — counterpart of vla_latent_action.hpp
@@ -17,10 +17,10 @@ The subpackage name never shadows the pip `cyclonedds` package — absolute
 imports inside these modules resolve to site-packages as usual.
 """
 
-from .config import DdsConfig, apply_network_interface, load_dds_config
+from .config import DdsConfig, apply_cyclonedds_xml, load_dds_config
 
 __all__ = [
     "DdsConfig",
-    "apply_network_interface",
+    "apply_cyclonedds_xml",
     "load_dds_config",
 ]

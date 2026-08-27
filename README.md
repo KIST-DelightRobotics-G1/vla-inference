@@ -65,6 +65,11 @@ CYCLONEDDS_HOME=$HOME/.local/opt/cyclonedds-0.10.2 \
     uv pip install --no-binary cyclonedds -e ".[dds,parquet,encode,vla,dev]"
 ```
 
+The bindings bake the core's path in at build time, so build them with the
+core already at its final location — and pass `--no-cache` when
+reinstalling after the core moved (uv would otherwise reuse a wheel built
+against the old path).
+
 #### 3. Download the encoder model
 
 ```bash

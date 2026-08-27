@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS tuning for the kist-vla-inference publishers and camera/state
+  readers. Same convention as kist-ext-sensor-io's config/cyclonedds.xml —
+  one file carries every network setting; config/config.yaml points here
+  (dds.cyclonedds_xml) and keeps only the domain id.
+
+  Socket buffers: depth/color frames are large; the default UDP socket
+  buffers overflow under burst and the receiver drops samples — a lost
+  H.264 fragment costs decode until the next keyframe. The OS caps these
+  at net.core.wmem_max / net.core.rmem_max. With Docker `network host` the
+  container shares the HOST net namespace, so raise the limits on the HOST
+  for the full 16MB to take effect (otherwise CycloneDDS is silently
+  clamped):
+      sudo sysctl -w net.core.wmem_max=16777216 net.core.rmem_max=16777216
+  (persist in /etc/sysctl.d/*.conf).
+
+  An already-exported CYCLONEDDS_URI wins over this file (the loader never
+  overrides the environment).
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <!-- The NIC toward the DDS peers (gearsonic, ext-sensor-io, the
+             robot). "lo" for same-machine testing — but multicast discovery
+             on 'lo' has failed before on this stack (2026-08-10, unitree
+             SDK interop); if peers don't discover each other, use the
+             machine's real interface. -->
+        <NetworkInterface name="eno2" priority="default" multicast="default"/>
+      </Interfaces>
+      <!-- Keep each UDP datagram within one MTU, same as ext-sensor-io's
+           config: the default MaxMessageSize (14720 B) bundles ~10 RTPS
+           fragments per datagram, which the IP layer re-fragments on a
+           1500-MTU LAN — one lost wire packet then costs ten fragments at
+           once, plus kernel-reassembly failure modes. Applies to what WE
+           send (latent actions are small, so today this is parity with the
+           C++ peers more than a tuning). -->
+      <FragmentSize>1344 B</FragmentSize>
+      <MaxMessageSize>1400 B</MaxMessageSize>
+      <MaxRexmitMessageSize>1400 B</MaxRexmitMessageSize>
+    </General>
+    <Internal>
+      <SocketSendBufferSize min="16MiB"/>
+      <SocketReceiveBufferSize min="16MiB"/>
+    </Internal>
+    <!-- Diagnostics: uncomment to have CycloneDDS log the fully resolved
+         configuration (verifies these settings actually apply).
+    <Tracing>
+      <Verbosity>config</Verbosity>
+      <OutputFile>/tmp/cyclonedds.log</OutputFile>
+    </Tracing>
+    -->
+  </Domain>
+</CycloneDDS>

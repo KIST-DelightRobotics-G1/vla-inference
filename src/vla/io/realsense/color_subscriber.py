@@ -1,4 +1,4 @@
-"""CameraSubscriber — one view: DDS reader + H.264 decode thread -> latest Frame.
+"""ColorSubscriber — one view: DDS reader + H.264 decode thread -> latest ColorFrame.
 
 The decode thread exists because the data format forces it: H.264 delta
 frames need their predecessors, so every sample must be decoded in arrival
@@ -7,7 +7,7 @@ newest decoded frame in a latest-value slot (a single tuple reference —
 atomic to swap under the GIL, no lock needed), and `latest()` returns a
 snapshot with its age so staleness stays the consumer's decision.
 
-Resync rule (from the validated vla_old implementation): wait for the
+Resync rule (validated on the real cameras): wait for the
 first keyframe; a seq gap breaks the delta chain, so drop until the next
 keyframe (ext-sensor-io sends periodic keyframes).
 """
@@ -16,11 +16,15 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from common.cyclonedds.config import apply_network_interface
-
-from .frame import Frame
+from .color_frame import ColorFrame
 
 DEFAULT_COLOR_TOPIC = "rt/kist/camera/color/h264"
+
+# Reader queue depth (KeepLast N), same value and rationale as the C++
+# receiver (ext-sensor-io color_subscriber.cpp): deep enough (~1s at 30fps)
+# to absorb arrival bursts without dropping at the reader; the downstream
+# slot is latest-wins, so a deeper queue adds no consumer latency.
+_HISTORY_DEPTH = 30
 
 
 def color_topic_for(name: str) -> str:
@@ -54,21 +58,27 @@ def _compressed_color_frame_type():
     return _frame_type_cache
 
 
-class CameraSubscriber:
+class ColorSubscriber:
     """Latest decoded frame of one ext-sensor-io color stream.
 
     Usage:
-        sub = CameraSubscriber("ego_view", topic=DEFAULT_COLOR_TOPIC)
+        sub = ColorSubscriber("ego_view", topic=DEFAULT_COLOR_TOPIC)
         sub.start(domain_id=0)
         frame, age_s = sub.latest()   # (None, inf) until the first frame
         sub.stop()
     """
 
-    def __init__(self, view: str, *, topic: str = DEFAULT_COLOR_TOPIC, history_depth: int = 32):
+    def __init__(self, view: str, *, topic: str = DEFAULT_COLOR_TOPIC):
         self.view = view
         self.topic = topic
-        self._history_depth = history_depth
-        self._latest: tuple[Frame, float] | None = None  # (frame, monotonic recv time)
+        # Wire diagnostics (monotonic counters, read from any thread):
+        # received = samples taken off DDS; lost = frames a seq jump skipped
+        # over (receive-side loss); resyncs = delta-chain breaks that forced
+        # a wait for the next keyframe.
+        self.received = 0
+        self.lost = 0
+        self.resyncs = 0
+        self._latest: tuple[ColorFrame, float] | None = None  # (frame, monotonic recv time)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._participant = None
@@ -77,15 +87,19 @@ class CameraSubscriber:
         self._synced = False  # waiting for the first keyframe
         self._last_seq: int | None = None
 
-    def start(self, *, domain_id: int, network_interface: str = "") -> None:
+    def start(self, *, domain_id: int) -> None:
         import av
         from cyclonedds.core import Policy, Qos
         from cyclonedds.domain import DomainParticipant
         from cyclonedds.sub import DataReader
         from cyclonedds.topic import Topic
 
-        apply_network_interface(network_interface)
-        qos = Qos(Policy.Reliability.BestEffort, Policy.History.KeepLast(self._history_depth))
+        # BestEffort: matches any writer reliability, latest-value semantics —
+        # the same stance as every state reader on this bus. A lost sample
+        # costs decode until the next keyframe (see the counters); if that
+        # ever needs retransmission instead, revisit together with the tx
+        # writer's QoS.
+        qos = Qos(Policy.Reliability.BestEffort, Policy.History.KeepLast(_HISTORY_DEPTH))
         self._participant = DomainParticipant(domain_id)
         self._reader = DataReader(
             self._participant,
@@ -96,12 +110,12 @@ class CameraSubscriber:
 
         self._stop_event.clear()
         self._thread = threading.Thread(
-            target=self._decode_loop, name=f"camera-rx-{self.view}", daemon=True
+            target=self._decode_loop, name=f"color-rx-{self.view}", daemon=True
         )
         self._thread.start()
-        print(f"[CameraSubscriber] domain {domain_id}: {self.topic} -> '{self.view}'")
+        print(f"[ColorSubscriber] domain {domain_id}: {self.topic} -> '{self.view}'")
 
-    def latest(self) -> tuple[Frame | None, float]:
+    def latest(self) -> tuple[ColorFrame | None, float]:
         """The newest decoded frame and its age in seconds ((None, inf) before
         the first frame). Snapshot semantics — never blocks, never decodes."""
         snapshot = self._latest
@@ -122,7 +136,7 @@ class CameraSubscriber:
 
     def _decode_loop(self) -> None:
         while not self._stop_event.is_set():
-            samples = self._reader.take(N=self._history_depth)
+            samples = self._reader.take(N=_HISTORY_DEPTH)
             if not samples:
                 self._stop_event.wait(0.002)
                 continue
@@ -130,20 +144,26 @@ class CameraSubscriber:
                 rgb = self._decode_sample(sample)
                 if rgb is not None:
                     self._latest = (
-                        Frame(rgb=rgb, stamp_ns=int(sample.stamp_ns)),
+                        ColorFrame(rgb=rgb, stamp_ns=int(sample.stamp_ns)),
                         time.monotonic(),
                     )
 
     def _decode_sample(self, sample):
         """Feed one CompressedColorFrame into the decoder; return newest image."""
+        self.received += 1
+        if self._last_seq is not None and sample.seq > self._last_seq + 1:
+            self.lost += int(sample.seq - self._last_seq - 1)
         if not self._synced:
             if not sample.is_keyframe:
+                self._last_seq = sample.seq
                 return None
             self._synced = True
         elif self._last_seq is not None and sample.seq != self._last_seq + 1:
             # Lost frames -> the delta chain is broken; resync at a keyframe.
             if not sample.is_keyframe:
                 self._synced = False
+                self.resyncs += 1
+                self._last_seq = sample.seq
                 return None
         self._last_seq = sample.seq
 
@@ -153,7 +173,7 @@ class CameraSubscriber:
                 for frame in self._codec.decode(packet):
                     newest = frame.to_ndarray(format="rgb24")
         except Exception as e:
-            print(f"[CameraSubscriber:{self.view}] decode error ({e}); waiting for keyframe")
+            print(f"[ColorSubscriber:{self.view}] decode error ({e}); waiting for keyframe")
             self._synced = False
             return None
         return newest

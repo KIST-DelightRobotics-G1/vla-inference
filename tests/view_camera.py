@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manually view a kist-ext-sensor-io camera stream (not a pytest test).
 
-Subscribes with the real CameraSubscriber (DDS + H.264 decode thread) and
+Subscribes with the real ColorSubscriber (DDS + H.264 decode thread) and
 shows what arrives. Two output modes:
 
 - default: writes the newest frame to shared/camera_preview/<view>.jpg
@@ -27,8 +27,8 @@ from pathlib import Path
 import cv2
 import tyro
 
-from common.cyclonedds.config import load_dds_config
-from vla.io.realsense_camera import CameraSubscriber, DEFAULT_COLOR_TOPIC, color_topic_for
+from common.cyclonedds.config import apply_cyclonedds_xml, load_dds_config
+from vla.io.realsense import ColorSubscriber, DEFAULT_COLOR_TOPIC, color_topic_for
 
 
 @dataclass
@@ -44,7 +44,7 @@ class Config:
     """Explicit topic override (wins over --name)."""
 
     config: str = "config/config.yaml"
-    """Network settings (dds: domain_id, network_interface)."""
+    """Network settings (dds.domain_id + the CycloneDDS transport XML)."""
 
     domain: int | None = None
     """DDS domain id override. Default: the config file's dds.domain_id."""
@@ -61,10 +61,11 @@ def main(config: Config) -> None:
         color_topic_for(config.name) if config.name else DEFAULT_COLOR_TOPIC
     )
     dds_cfg = load_dds_config(config.config)
+    apply_cyclonedds_xml(dds_cfg.cyclonedds_xml)
     domain = config.domain if config.domain is not None else dds_cfg.domain_id
 
-    subscriber = CameraSubscriber(config.view, topic=topic)
-    subscriber.start(domain_id=domain, network_interface=dds_cfg.network_interface)
+    subscriber = ColorSubscriber(config.view, topic=topic)
+    subscriber.start(domain_id=domain)
 
     save_path = Path(config.save_dir) / f"{config.view}.jpg"
     if not config.show:
@@ -73,6 +74,7 @@ def main(config: Config) -> None:
 
     last_stamp = None
     frames = 0
+    last_received = last_lost = last_resyncs = 0
     last_report = time.monotonic()
     last_save = 0.0
     try:
@@ -85,7 +87,14 @@ def main(config: Config) -> None:
                 frames += 1
                 bgr = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
                 if config.show:
-                    cv2.imshow(config.view, bgr)
+                    try:
+                        cv2.imshow(config.view, bgr)
+                    except cv2.error:
+                        raise SystemExit(
+                            "--show needs a GUI opencv build and a DISPLAY; this "
+                            "environment has opencv-python-headless (the docker "
+                            "image does). Use the default JPEG mode instead."
+                        ) from None
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
                 elif now - last_save >= 0.5:
@@ -94,14 +103,23 @@ def main(config: Config) -> None:
 
             if now - last_report >= 1.0:
                 if frame is None:
-                    print("waiting for frames... (is ext-sensor-io publishing?)")
+                    print(
+                        f"waiting for frames on {topic} ... (is ext-sensor-io "
+                        f"publishing there? a named camera needs --name <camera>)"
+                    )
                 else:
                     print(
                         f"{config.view}: {frame.rgb.shape[1]}x{frame.rgb.shape[0]}  "
                         f"{frames} new frames/s  age {age * 1000:.0f}ms  "
+                        f"recv {subscriber.received - last_received}/s  "
+                        f"lost {subscriber.lost - last_lost}  "
+                        f"resyncs {subscriber.resyncs - last_resyncs}  "
                         f"stamp {frame.stamp_ns}"
                     )
                 frames = 0
+                last_received = subscriber.received
+                last_lost = subscriber.lost
+                last_resyncs = subscriber.resyncs
                 last_report = now
             time.sleep(0.01)
     except KeyboardInterrupt:
@@ -109,7 +127,10 @@ def main(config: Config) -> None:
     finally:
         subscriber.stop()
         if config.show:
-            cv2.destroyAllWindows()
+            try:
+                cv2.destroyAllWindows()
+            except cv2.error:
+                pass
 
 
 if __name__ == "__main__":

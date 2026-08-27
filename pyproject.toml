@@ -17,8 +17,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
-# Publishing over DDS (src/replay/publisher/):
-dds = ["cyclonedds"]
+# Publishing over DDS (src/replay/publisher/). cyclonedds is PINNED to the
+# robot bus's DDS generation: the 11.x wheel's modern discovery TypeObject
+# segfaults the 0.10.x receivers (gearsonic, ext-sensor-io — unitree_sdk2
+# vendors 0.10.2). No 0.10.x wheel exists for python 3.12 — build the
+# bindings against a 0.10.2 core (the docker image does this in a builder
+# stage; on a host: build the core, then
+#   CYCLONEDDS_HOME=<core prefix> uv pip install --no-binary cyclonedds "kist-vla-inference[dds]").
+dds = ["cyclonedds==0.10.2"]
 # Replaying LeRobot training-export episodes (src/replay/io/parquet_io.py):
 parquet = ["pyarrow"]
 # Re-encoding recorded joints into tokens offline (src/replay/encoder/):
@@ -26,7 +32,7 @@ encode = ["onnxruntime", "pyarrow"]
 # The VLA input sources (src/vla/io/): DDS camera decode + image handling.
 # The unitree state source additionally needs unitree_sdk2py (not on PyPI;
 # install a clone with --no-deps).
-vla = ["cyclonedds", "av", "opencv-python-headless"]
+vla = ["cyclonedds==0.10.2", "av", "opencv-python-headless"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -34,7 +40,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["common", "common.cyclonedds", "replay", "replay.aligner", "replay.builder", "replay.encoder", "replay.io", "replay.publisher", "vla", "vla.io", "vla.io.realsense_camera", "vla.io.unitree", "vla_old"]
+packages = ["common", "common.cyclonedds", "replay", "replay.aligner", "replay.builder", "replay.encoder", "replay.io", "replay.publisher", "vla", "vla.io", "vla.io.realsense", "vla.io.unitree"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

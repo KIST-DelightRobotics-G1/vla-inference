@@ -15,8 +15,6 @@ import time
 
 import numpy as np
 
-from common.cyclonedds.config import apply_network_interface
-
 from .robot_state import RobotState
 
 LOWSTATE_TOPIC = "rt/lowstate"
@@ -59,14 +57,13 @@ class RobotStateSubscriber:
         self._right_hand_q = None
         self._lowstate_received_at: float | None = None
 
-    def start(self, *, domain_id: int, network_interface: str = "") -> None:
+    def start(self, *, domain_id: int) -> None:
         from cyclonedds.core import Policy, Qos
         from cyclonedds.domain import DomainParticipant
         from cyclonedds.sub import DataReader
         from cyclonedds.topic import Topic
         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandState_, LowState_
 
-        apply_network_interface(network_interface)
         qos = Qos(Policy.Reliability.BestEffort, Policy.History.KeepLast(1))
         self._participant = DomainParticipant(domain_id)
         lowstate_topic, left_topic, right_topic = self._topics
