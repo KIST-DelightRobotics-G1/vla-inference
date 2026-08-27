@@ -14,7 +14,7 @@ on the Unitree G1 humanoid robot.
 |---|---|---|
 | Python | ≥ 3.10 (docker image: 3.12) | runtime |
 | numpy, tyro, pyyaml | PyPI | core runtime (installed automatically) |
-| `cyclonedds` | PyPI, `[dds]` extra | DDS publisher (the wheel bundles libddsc — no system install) |
+| `cyclonedds` | 0.10.2, `[dds]` extra | DDS transport — bindings built against a CycloneDDS 0.10.2 core (the robot bus's generation; the 11.x wheel's discovery TypeObject segfaults the 0.10.x receivers). The docker image builds it in a builder stage |
 | `pyarrow` | PyPI, `[parquet]` extra | LeRobot training-export episodes |
 | `onnxruntime` | PyPI, `[encode]` extra | joint re-encoding (CPU provider — no GPU) |
 | `pytest` | `[dev]` extra | tests |
@@ -51,9 +51,18 @@ numbered steps below (2–3) are the manual (non-Docker) alternative.
 
 #### 2. Create the virtualenv
 
+The `cyclonedds` bindings must be built against a 0.10.2 core (no 3.12
+wheel; see the Dependencies note):
+
 ```bash
+git clone --depth 1 -b 0.10.2 https://github.com/eclipse-cyclonedds/cyclonedds.git /tmp/cyclonedds
+cmake -S /tmp/cyclonedds -B /tmp/cyclonedds/build \
+    -DCMAKE_INSTALL_PREFIX=$HOME/.local/opt/cyclonedds-0.10.2 -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/cyclonedds/build --target install -j"$(nproc)"
+
 uv venv --python 3.12 && source .venv/bin/activate
-uv pip install -e ".[dds,parquet,encode,dev]"
+CYCLONEDDS_HOME=$HOME/.local/opt/cyclonedds-0.10.2 \
+    uv pip install --no-binary cyclonedds -e ".[dds,parquet,encode,vla,dev]"
 ```
 
 #### 3. Download the encoder model
