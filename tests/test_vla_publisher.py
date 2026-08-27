@@ -6,7 +6,7 @@ import time
 import numpy as np
 import pytest
 
-from vla.latent_action_publisher import LatentActionPublisher
+from vla_old.latent_action_publisher import LatentActionPublisher
 
 
 class FakeWriter:

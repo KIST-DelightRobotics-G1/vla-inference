@@ -30,7 +30,7 @@ from unitree_sdk2py.idl.default import (  # noqa: E402
     unitree_hg_msg_dds__LowState_,
 )
 
-from vla.state_source import (  # noqa: E402
+from vla_old.state_source import (  # noqa: E402
     LEFT_HAND_TOPIC,
     LOWSTATE_TOPIC,
     RIGHT_HAND_TOPIC,
@@ -133,7 +133,7 @@ def test_state_requires_hands_by_default(state_setup):
 
 av = pytest.importorskip("av")
 
-from vla.camera_source import DdsCameraSource, get_camera_types  # noqa: E402
+from vla_old.camera_source import DdsCameraSource, get_camera_types  # noqa: E402
 
 CAMERA_TOPIC = "rt/kist/camera/test/color/h264"
 

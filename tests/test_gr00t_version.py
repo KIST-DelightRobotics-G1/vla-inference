@@ -6,7 +6,7 @@ These run on a machine with no gr00t and no GPU, so they pin the contract
 
 import re
 
-from vla.gr00t_version import (
+from vla_old.gr00t_version import (
     EXPECTED_GR00T_COMMIT,
     installed_gr00t_commit,
     warn_on_gr00t_commit_mismatch,

@@ -36,7 +36,7 @@ import numpy as np
 import tyro
 
 from common.config import RunnerConfig
-from vla.observation import ObservationBuilder
+from vla_old.observation import ObservationBuilder
 
 
 @dataclass

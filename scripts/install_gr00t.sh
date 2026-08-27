@@ -4,7 +4,7 @@
 #
 #   bash scripts/install_gr00t.sh          # clone/fetch + checkout + install
 #
-# The commit is read from src/vla/gr00t_version.py so there is exactly one
+# The commit is read from src/vla_old/gr00t_version.py so there is exactly one
 # authority for it. Override the clone location with GR00T_SRC and the fork
 # with GR00T_REMOTE.
 #
@@ -24,7 +24,7 @@ if [ ! -x "$PYTHON" ]; then
 fi
 
 # Single source of truth: the same constant the runtime check compares against.
-COMMIT="$("$PYTHON" -c 'from vla.gr00t_version import EXPECTED_GR00T_COMMIT; print(EXPECTED_GR00T_COMMIT)')"
+COMMIT="$("$PYTHON" -c 'from vla_old.gr00t_version import EXPECTED_GR00T_COMMIT; print(EXPECTED_GR00T_COMMIT)')"
 echo "[1/3] target commit $COMMIT"
 
 if [ -d "$GR00T_SRC/.git" ]; then
@@ -50,7 +50,7 @@ VIRTUAL_ENV="$REPO_ROOT/.venv" uv pip install -e "$GR00T_SRC"
 echo
 "$PYTHON" - <<'PY'
 import torch, gr00t
-from vla.gr00t_version import EXPECTED_GR00T_COMMIT, installed_gr00t_commit
+from vla_old.gr00t_version import EXPECTED_GR00T_COMMIT, installed_gr00t_commit
 actual = installed_gr00t_commit()
 print(f"torch  {torch.__version__}  cuda={torch.cuda.is_available()}")
 print(f"gr00t  {gr00t.__file__}")

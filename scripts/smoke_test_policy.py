@@ -36,8 +36,8 @@ import numpy as np
 import tyro
 
 from common.config import RunnerConfig
-from vla.gr00t_version import EXPECTED_GR00T_COMMIT, installed_gr00t_commit
-from vla.observation import ObservationBuilder
+from vla_old.gr00t_version import EXPECTED_GR00T_COMMIT, installed_gr00t_commit
+from vla_old.observation import ObservationBuilder
 
 
 @dataclass

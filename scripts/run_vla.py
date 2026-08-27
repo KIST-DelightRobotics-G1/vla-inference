@@ -12,7 +12,7 @@ Examples:
 import tyro
 
 from common.config import RunnerConfig
-from vla.runner import main
+from vla_old.runner import main
 
 if __name__ == "__main__":
     main(tyro.cli(RunnerConfig))
