@@ -32,16 +32,18 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:${PATH}
 RUN uv venv /opt/venv --python 3.12
 
-# ─── replay dependencies ──────────────────────────────────────────────────────
-# The complete third-party set the replay import graph reaches, pinned to
+# ─── replay + vla-io dependencies ─────────────────────────────────────────────
+# The third-party set the replay import graph reaches, pinned to
 # requirements.lock.txt where recorded: numpy/tyro/pyyaml (direct),
 # cyclonedds (publisher), pyarrow (LeRobot episodes), onnxruntime (joint
-# re-encoding, CPU provider), pytest (bake-time suite). Installed before the
-# source COPY so code edits never re-download.
+# re-encoding, CPU provider), pytest (bake-time suite). av + opencv serve
+# the vla input sources (H.264 camera decode, tests/view_camera.py).
+# Installed before the source COPY so code edits never re-download.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install \
-    numpy==1.26.4 tyro==0.9.17 pyyaml==6.0.3 \
+    numpy==2.5.2 tyro==0.9.17 pyyaml==6.0.3 \
     cyclonedds==11.0.1 pyarrow==25.0.1 onnxruntime==1.29.0 \
+    av==18.0.0 opencv-python-headless==5.0.0.93 \
     pytest==9.1.1
 
 # ─── models: GEAR-SONIC encoder ONNX ──────────────────────────────────────────

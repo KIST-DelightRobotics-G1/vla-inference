@@ -1,24 +1,30 @@
-# Exact third-party set of the replay environment — the same pins the
-# docker image installs (docker/Dockerfile), frozen from a clean install of:
-#   numpy==1.26.4 tyro==0.9.17 pyyaml==6.0.3
-#   cyclonedds==11.0.1 pyarrow==25.0.1 onnxruntime==1.29.0 pytest==9.1.1
+# Exact third-party set of the replay + vla-io environment — the same pins
+# the docker image installs (docker/Dockerfile), frozen from a clean
+# install of:
+#   numpy==2.5.2 tyro==0.9.17 pyyaml==6.0.3
+#   cyclonedds==11.0.1 pyarrow==25.0.1 onnxruntime==1.29.0
+#   av==18.0.0 opencv-python-headless==5.0.0.93 pytest==9.1.1
+# (numpy 2: opencv-python-headless 5.x requires numpy>=2; the old 1.26.4
+# pin was a gr00t/torch-era constraint.)
 #
 # This is a RECORD, not the primary install path — install with
-#   uv pip install -e ".[dds,parquet,encode,dev]"
+#   uv pip install -e ".[dds,parquet,encode,vla,dev]"
 #
 # The VLA inference environment (torch cu128, pinned gr00t, transformers,
 # flash-attn, ...) was recorded here before 2026-08-26 — recover that
 # version of this file from git history together with the docker VLA
 # environment.
-click==8.4.2
+av==18.0.0
+click==8.5.0
 cyclonedds==11.0.1
 docstring-parser==0.18.0
 flatbuffers==25.12.19
 iniconfig==2.3.0
 markdown-it-py==4.2.0
 mdurl==0.1.2
-numpy==1.26.4
+numpy==2.5.2
 onnxruntime==1.29.0
+opencv-python-headless==5.0.0.93
 packaging==26.3
 pluggy==1.6.0
 protobuf==7.36.0
