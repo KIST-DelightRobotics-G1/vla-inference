@@ -69,8 +69,9 @@ class UnitreeStateReader:
     """Latest converted state of each unitree stream.
 
     Usage:
+        participant = DomainParticipant(domain_id)   # ONE per process
         reader = UnitreeStateReader()
-        reader.start(domain_id=0)
+        reader.start(participant=participant)
         state, age_s = reader.latest_state()       # (None, inf) until data
         left, age_s = reader.latest_left_hand()
         right, age_s = reader.latest_right_hand()
@@ -85,7 +86,6 @@ class UnitreeStateReader:
         right_hand_topic: str = RIGHT_HAND_STATE_TOPIC,
     ):
         self._topics = (lowstate_topic, left_hand_topic, right_hand_topic)
-        self._participant = None
         self._readers = None
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -94,18 +94,16 @@ class UnitreeStateReader:
         self._left: tuple[HandState, float] | None = None
         self._right: tuple[HandState, float] | None = None
 
-    def start(self, *, domain_id: int) -> None:
+    def start(self, *, participant) -> None:
         from cyclonedds.core import Policy, Qos
-        from cyclonedds.domain import DomainParticipant
         from cyclonedds.sub import DataReader
         from cyclonedds.topic import Topic
         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandState_, LowState_
 
         qos = Qos(Policy.Reliability.BestEffort, Policy.History.KeepLast(1))
-        self._participant = DomainParticipant(domain_id)
         lowstate_topic, left_topic, right_topic = self._topics
         self._readers = tuple(
-            DataReader(self._participant, Topic(self._participant, name, kind), qos=qos)
+            DataReader(participant, Topic(participant, name, kind), qos=qos)
             for name, kind in (
                 (lowstate_topic, LowState_),
                 (left_topic, HandState_),
@@ -118,8 +116,7 @@ class UnitreeStateReader:
         )
         self._thread.start()
         print(
-            f"[UnitreeStateReader] domain {domain_id}: {lowstate_topic}, "
-            f"{left_topic}, {right_topic}"
+            f"[UnitreeStateReader] {lowstate_topic}, {left_topic}, {right_topic}"
         )
 
     # ── per-stream latest snapshots ───────────────────────────────────────────
@@ -140,7 +137,6 @@ class UnitreeStateReader:
             self._thread.join(timeout=2.0)
             self._thread = None
         self._readers = None
-        self._participant = None
 
     # ── Rx thread ─────────────────────────────────────────────────────────────
 

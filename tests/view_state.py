@@ -44,8 +44,11 @@ def main(config: Config) -> None:
     apply_cyclonedds_xml(dds_cfg.cyclonedds_xml)
     domain = config.domain if config.domain is not None else dds_cfg.domain_id
 
+    from cyclonedds.domain import DomainParticipant
+
+    participant = DomainParticipant(domain)  # one per process; sources attach
     reader = UnitreeStateReader()
-    reader.start(domain_id=domain)
+    reader.start(participant=participant)
 
     try:
         while True:

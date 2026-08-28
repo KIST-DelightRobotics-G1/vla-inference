@@ -62,10 +62,16 @@ class ColorSubscriber:
     """Latest decoded frame of one ext-sensor-io color stream.
 
     Usage:
+        participant = DomainParticipant(domain_id)   # ONE per process
         sub = ColorSubscriber("ego_view", topic=DEFAULT_COLOR_TOPIC)
-        sub.start(domain_id=0)
+        sub.start(participant=participant)
         frame, age_s = sub.latest()   # (None, inf) until the first frame
         sub.stop()
+
+    The participant is injected, not owned: a process opens ONE
+    DomainParticipant and every source attaches its readers to it (the
+    ChannelFactory convention on the C++ side) — one participant on the
+    bus instead of one per source.
     """
 
     def __init__(self, view: str, *, topic: str = DEFAULT_COLOR_TOPIC):
@@ -81,16 +87,14 @@ class ColorSubscriber:
         self._latest: tuple[ColorFrame, float] | None = None  # (frame, monotonic recv time)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._participant = None
         self._reader = None
         self._codec = None
         self._synced = False  # waiting for the first keyframe
         self._last_seq: int | None = None
 
-    def start(self, *, domain_id: int) -> None:
+    def start(self, *, participant) -> None:
         import av
         from cyclonedds.core import Policy, Qos
-        from cyclonedds.domain import DomainParticipant
         from cyclonedds.sub import DataReader
         from cyclonedds.topic import Topic
 
@@ -100,10 +104,9 @@ class ColorSubscriber:
         # ever needs retransmission instead, revisit together with the tx
         # writer's QoS.
         qos = Qos(Policy.Reliability.BestEffort, Policy.History.KeepLast(_HISTORY_DEPTH))
-        self._participant = DomainParticipant(domain_id)
         self._reader = DataReader(
-            self._participant,
-            Topic(self._participant, self.topic, _compressed_color_frame_type()),
+            participant,
+            Topic(participant, self.topic, _compressed_color_frame_type()),
             qos=qos,
         )
         self._codec = av.CodecContext.create("h264", "r")
@@ -113,7 +116,7 @@ class ColorSubscriber:
             target=self._decode_loop, name=f"color-rx-{self.view}", daemon=True
         )
         self._thread.start()
-        print(f"[ColorSubscriber] domain {domain_id}: {self.topic} -> '{self.view}'")
+        print(f"[ColorSubscriber] {self.topic} -> '{self.view}'")
 
     def latest(self) -> tuple[ColorFrame | None, float]:
         """The newest decoded frame and its age in seconds ((None, inf) before
@@ -130,7 +133,6 @@ class ColorSubscriber:
             self._thread.join(timeout=2.0)
             self._thread = None
         self._reader = None
-        self._participant = None
 
     # ── decode thread ─────────────────────────────────────────────────────────
 
