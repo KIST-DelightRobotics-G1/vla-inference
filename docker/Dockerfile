@@ -41,6 +41,15 @@ RUN uv venv /opt/wheelenv --python 3.12 && \
     CYCLONEDDS_HOME=/opt/cyclonedds /opt/wheelenv/bin/python -m pip wheel \
         --no-binary cyclonedds --no-deps -w /wheels cyclonedds==0.10.2
 
+# unitree_sdk2py (not on PyPI): the unitree DDS IDL types the state reader
+# needs (rt/lowstate LowState_, rt/dex3/* HandState_). Wheel built here so
+# the runtime stage needs no git; installed --no-deps there (it would pull
+# opencv-python and re-pin cyclonedds — our 0.10.2 matches its pin anyway).
+ARG UNITREE_SDK2PY_REF=master
+RUN git clone --depth 1 --branch "${UNITREE_SDK2PY_REF}" \
+        https://github.com/unitreerobotics/unitree_sdk2_python.git /tmp/unitree_sdk2_python && \
+    /opt/wheelenv/bin/python -m pip wheel --no-deps -w /wheels /tmp/unitree_sdk2_python
+
 # ─── stage 2: the runtime image ───────────────────────────────────────────────
 FROM ubuntu:24.04
 
@@ -80,7 +89,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     /wheels/cyclonedds-0.10.2-*.whl \
     pyarrow==25.0.1 onnxruntime==1.29.0 \
     av==18.0.0 opencv-python-headless==5.0.0.93 \
-    pytest==9.1.1
+    pytest==9.1.1 && \
+    uv pip install --no-deps /wheels/unitree_sdk2py-*.whl
 
 # ─── models: GEAR-SONIC encoder ONNX ──────────────────────────────────────────
 # For `--tokens-from joints` (offline joint re-encoding) at its fixed path

@@ -1,21 +1,26 @@
-"""Unitree robot-state streams — poll-based, no thread needed.
+"""Unitree robot-state streams — the python twin of gearsonic's unitree/.
 
-The same topics the gearsonic C++ side reads: `rt/lowstate` (29 body motors
-+ the pelvis IMU quaternion — NOT the torso IMU on rt/secondary_imu) and
-`rt/dex3/{left,right}/state` (7 hand motors each, on their own clocks).
+Same topics the gearsonic C++ side reads, same converted structs, same
+names (`UnitreeStateReader`, `UnitreeState`, `IMU`):
 
-    robot_state_subscriber.py  RobotStateSubscriber — three KeepLast(1)
-                               readers polled on the caller's thread (the
-                               transport already keeps the newest sample);
-                               non-finite samples dropped at intake
-    robot_state.py             RobotState — the product: one combined
-                               whole-robot snapshot
+    unitree_state_reader.py  UnitreeStateReader — rt/lowstate +
+                             rt/dex3/{left,right}/state; an Rx thread
+                             stamps arrival times so ages are trustworthy
+    unitree_state.py         UnitreeState + IMU — one converted LowState
+                             sample (29 motors q/dq/tau, PELVIS imu, tick,
+                             mode_machine)
+    hand_state.py            HandState — one converted Dex3 sample (our
+                             addition: gearsonic only writes hand commands,
+                             the VLA observation needs the measured hands)
 
-Consumer contract: `latest() -> (RobotState | None, age_s)` — same shape
-as the camera subscriber; threading is each source's internal detail.
+Consumer contract: `latest_state()` / `latest_left_hand()` /
+`latest_right_hand()` each return `(snapshot | None, age_s)` — per-stream
+ages, so freshness is judged per stream (the hands run on their own
+clocks).
 """
 
-from .robot_state import RobotState
-from .robot_state_subscriber import RobotStateSubscriber
+from .hand_state import HandState
+from .unitree_state import IMU, UnitreeState
+from .unitree_state_reader import UnitreeStateReader
 
-__all__ = ["RobotState", "RobotStateSubscriber"]
+__all__ = ["HandState", "IMU", "UnitreeState", "UnitreeStateReader"]
