@@ -40,7 +40,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = ["common", "common.cyclonedds", "replay", "replay.aligner", "replay.builder", "replay.encoder", "replay.io", "replay.publisher", "vla", "vla.io", "vla.io.realsense", "vla.io.unitree"]
+packages = ["common", "common.cyclonedds", "replay", "replay.aligner", "replay.builder", "replay.encoder", "replay.io", "replay.publisher", "vla", "vla.io", "vla.io.realsense", "vla.io.unitree", "vla.observation"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
