@@ -9,9 +9,15 @@ from dataclasses import dataclass
 
 import numpy as np
 
-NUM_HAND_MOTORS = 7  # Dex3-1: thumb x3, index x2, middle x2
+# Dex3-1 wire order, MEASURED on the real hands (2026-08-28, both hands):
+#   q[0:3] thumb, q[3:5] the MIDDLE-position finger, q[5:7] the INDEX-position
+#   finger. NOTE: the reference stack labels q[3:5] "index" and q[5:7]
+#   "middle" — physically swapped, but training data and inference both use
+#   the same wire order, so the model sees a consistent signal either way.
+#   Never "fix" the order in code; it would desync from the checkpoint.
+NUM_HAND_MOTORS = 7
 
 
 @dataclass(frozen=True)
 class HandState:
-    q: np.ndarray  # (7,) float64, rad — HandState_.motor_state[0:7].q, Dex motor order
+    q: np.ndarray  # (7,) float64, rad — HandState_.motor_state[0:7].q, wire order (see above)
