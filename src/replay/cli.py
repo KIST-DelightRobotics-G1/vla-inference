@@ -108,7 +108,7 @@ def _require_encoder() -> None:
         raise SystemExit(
             f"{ENCODER_ONNX} not found — the docker image bakes it in; on a "
             f"host checkout: wget -P models "
-            f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx"
+            f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/sonic_v1_1/model_encoder.onnx"
         )
 
 

@@ -59,7 +59,7 @@ uv pip install -e ".[dds,parquet,encode,dev]"
 #### 3. Download the encoder model
 
 ```bash
-wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx
+wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/sonic_v1_1/model_encoder.onnx
 ```
 
 ## Usage
