@@ -101,7 +101,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # encoder pairs with. Must be swapped together with that decoder checkpoint.
 WORKDIR /workspace/kist-vla-inference
 RUN wget -q -P models \
-    https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx
+    https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/sonic_v1_1/model_encoder.onnx
 
 # ─── stage 3: replay — the slim CPU-only target ───────────────────────────────
 # Bake the repo in (build context = repo root minus .venv/.git/models via
