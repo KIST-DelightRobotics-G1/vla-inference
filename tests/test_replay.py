@@ -240,9 +240,11 @@ def test_bracket_wraps_the_timeline_in_standing_lead_and_blends(tmp_path):
     timeline = csv_timeline(tmp_path)
 
     standing = np.full(64, 5.0, dtype=np.float32)
-    open_hand = np.zeros(7, dtype=np.float32)
+    left_hand = np.zeros(7, dtype=np.float32)
+    right_hand = np.full(7, 0.5, dtype=np.float32)  # per-side pose (e.g. fist mirror)
     stream = bracket_timeline(
-        timeline, standing, open_hand, lead_in_ticks=3, lead_out_ticks=2, blend_ticks=4
+        timeline, standing, left_hand, right_hand,
+        lead_in_ticks=3, lead_out_ticks=2, blend_ticks=4,
     )
 
     assert len(stream) == 3 + 4 + 10 + 4 + 2
@@ -256,7 +258,8 @@ def test_bracket_wraps_the_timeline_in_standing_lead_and_blends(tmp_path):
     steps = list(stream)
     assert [s.frame_index for s in steps[:3]] == [0, 1, 2]
     assert np.array_equal(steps[0].token_state, standing)
-    assert np.array_equal(steps[-1].left_hand_joints, open_hand)
+    assert np.array_equal(steps[-1].left_hand_joints, left_hand)
+    assert np.array_equal(steps[-1].right_hand_joints, right_hand)
     assert stream[-1].frame_index == len(stream) - 1
     # blends land on the timeline's first / last tick
     assert stream.tokens[3 + 4 - 1][0] == pytest.approx(timeline.tokens[0][0])
@@ -277,12 +280,12 @@ def test_bracket_refuses_compressed_gaps_unless_forced(tmp_path):
     open_hand = np.zeros(7, dtype=np.float32)
     with pytest.raises(CompressedGapError, match="force=True"):
         bracket_timeline(
-            timeline, standing, open_hand,
+            timeline, standing, open_hand, open_hand,
             lead_in_ticks=1, lead_out_ticks=1, blend_ticks=1,
         )
 
     stream = bracket_timeline(
-        timeline, standing, open_hand,
+        timeline, standing, open_hand, open_hand,
         lead_in_ticks=1, lead_out_ticks=1, blend_ticks=1, force=True,
     )
     assert len(stream) == len(timeline) + 1 + 1 + 2
@@ -294,6 +297,7 @@ def test_bracket_with_zero_lead_is_just_the_timeline(tmp_path):
     stream = bracket_timeline(
         timeline,
         np.zeros(64, dtype=np.float32),
+        np.zeros(7, dtype=np.float32),
         np.zeros(7, dtype=np.float32),
         lead_in_ticks=0,
         lead_out_ticks=0,
@@ -307,6 +311,6 @@ def test_bracket_rejects_a_wrong_sized_standing_token(tmp_path):
     timeline = csv_timeline(tmp_path)
     with pytest.raises(ValueError, match="standing_token must have 64"):
         bracket_timeline(
-            timeline, np.zeros(32), np.zeros(7),
+            timeline, np.zeros(32), np.zeros(7), np.zeros(7),
             lead_in_ticks=1, lead_out_ticks=1, blend_ticks=1,
         )
