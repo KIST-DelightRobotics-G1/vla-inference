@@ -32,11 +32,13 @@ import numpy as np
 from ..constants import CONTROL_DT_NS, TOKEN_DIM
 
 # ── encoder input layout (token_encoder.cpp offsets, g1 mode) ────────────────
-ENCODER_INPUT_DIM = 1762
+# SONIC v1.1 (sonic_v1_1/observation_config.yaml; perturbation-verified
+# 2026-08-28). The release checkpoint used dim 1762 with the anchor at 601.
+ENCODER_INPUT_DIM = 1751
 OFF_MODE = 0        # obs[0] = 0.0 -> g1 mode (teleop slots stay zero)
 OFF_MOTION_Q = 4    # 10 frames x 29 joints, IsaacLab order
 OFF_MOTION_DQ = 294
-OFF_ANCHOR_ORI = 601  # 10 frames x 6 (first two rotation-matrix columns)
+OFF_ANCHOR_ORI = 584  # 10 frames x 6 (first two rotation-matrix columns)
 NUM_FRAMES = 10     # *_10frame_step5
 FRAME_STEP = 5
 NUM_BODY_JOINTS = 29
@@ -95,7 +97,7 @@ def assemble_encoder_obs(
     dq_mujoco: np.ndarray | None = None,
     dt: float = CONTROL_DT_NS / 1e9,
 ) -> np.ndarray:
-    """Recorded joints + base quats -> encoder obs_dict rows (T, 1762).
+    """Recorded joints + base quats -> encoder obs_dict rows (T, 1751).
 
     Args:
         q_mujoco: (T, 29) joint positions, MuJoCo/Unitree order (rad).
@@ -159,7 +161,7 @@ def encode_joints(
 
 
 def load_onnx_encoder(onnx_path: str | Path):
-    """`model_encoder.onnx` -> a callable (N, 1762) -> (N, 64)."""
+    """`model_encoder.onnx` -> a callable (N, 1751) -> (N, 64)."""
     try:
         import onnxruntime as ort
     except ImportError as e:

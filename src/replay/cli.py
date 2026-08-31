@@ -36,9 +36,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from common.config import DEFAULT_INITIAL_MOTION_TOKEN
+from common.config import (
+    DEFAULT_INITIAL_LEFT_HAND_Q,
+    DEFAULT_INITIAL_MOTION_TOKEN,
+    DEFAULT_INITIAL_RIGHT_HAND_Q,
+)
 from common.cyclonedds.config import load_dds_config
-from common.g1_joints import OPEN_HAND_Q
 
 from .aligner import align_joints, align_tokens
 from .constants import CONTROL_DT_NS
@@ -108,7 +111,7 @@ def _require_encoder() -> None:
         raise SystemExit(
             f"{ENCODER_ONNX} not found — the docker image bakes it in; on a "
             f"host checkout: wget -P models "
-            f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx"
+            f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/sonic_v1_1/model_encoder.onnx"
         )
 
 
@@ -118,7 +121,8 @@ def build_stream(timeline: Timeline, config: Config) -> ActionStream:
     return bracket_timeline(
         timeline,
         DEFAULT_INITIAL_MOTION_TOKEN,
-        OPEN_HAND_Q,
+        DEFAULT_INITIAL_LEFT_HAND_Q,
+        DEFAULT_INITIAL_RIGHT_HAND_Q,
         lead_in_ticks=round(config.lead_in_s * rate),
         lead_out_ticks=round(config.lead_out_s * rate),
         blend_ticks=round(config.blend_s * rate),

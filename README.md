@@ -59,7 +59,7 @@ uv pip install -e ".[dds,parquet,encode,dev]"
 #### 3. Download the encoder model
 
 ```bash
-wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx
+wget -P models https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/sonic_v1_1/model_encoder.onnx
 ```
 
 ## Usage
@@ -100,3 +100,11 @@ session survives a checkpoint change:
 ```bash
 python scripts/replay_session.py --path <dataset-dir> --episode 1 --joints
 ```
+
+The deployed checkpoint is SONIC **v1.1** (since 2026-08-31, matching
+gearsonic's decoder). Sessions recorded before that date carry
+release-checkpoint tokens and MUST be replayed with `--joints`; sessions
+recorded against a v1.1 gearsonic replay either way. When the checkpoint
+changes again, re-derive the safe standing token too
+(`tests/derive_standing_token.py` — update `common/config.py` and
+gearsonic's `vla_initial_pose.hpp` together).
