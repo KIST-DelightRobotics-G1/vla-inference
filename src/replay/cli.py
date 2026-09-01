@@ -41,7 +41,7 @@ from common.config import (
     DEFAULT_INITIAL_MOTION_TOKEN,
     DEFAULT_INITIAL_RIGHT_HAND_Q,
 )
-from common.cyclonedds.config import load_dds_config
+from common.cyclonedds.config import apply_cyclonedds_xml, load_dds_config
 
 from .aligner import align_joints, align_tokens
 from .constants import CONTROL_DT_NS
@@ -78,7 +78,7 @@ class Config:
     collector CSV sessions encode lowstate.csv q+dq on the token grid."""
 
     config: str = "config/config.yaml"
-    """Network settings (dds: domain_id, network_interface) — gearsonic-style.
+    """Network settings (dds: domain_id, cyclonedds_xml) — gearsonic-style.
     A missing file at this default path falls back to built-in defaults."""
 
     domain: int | None = None
@@ -177,15 +177,14 @@ def main(config: Config) -> None:
         sys.exit(1)
 
     dds_cfg = load_dds_config(config.config)
+    apply_cyclonedds_xml(dds_cfg.cyclonedds_xml)
     domain = config.domain if config.domain is not None else dds_cfg.domain_id
 
     # Main thread = lifecycle only: the publisher owns the channel and the
     # Tx worker thread (ext-sensor-io transmitter pattern).
     print("THE ROBOT MOVES NOW — VR e-stop is A+B+X+Y held 1s.")
     publisher = LatentActionPublisher()
-    publisher.start(
-        stream, domain_id=domain, network_interface=dds_cfg.network_interface
-    )
+    publisher.start(stream, domain_id=domain)
     try:
         publisher.wait()
     except KeyboardInterrupt:
