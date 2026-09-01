@@ -45,6 +45,10 @@ class Config:
     device: str = "cuda:0"
     """CUDA device for the model."""
 
+    embodiment_tag: str = "unitree_g1_sonic_3views"
+    """Which of the checkpoint's embodiments to run (e.g. unitree_g1_sonic
+    for a 1-view checkpoint)."""
+
     runs: int = 5
     """Timed inference runs after the warmup run."""
 
@@ -76,7 +80,9 @@ def main(config: Config) -> None:
     t0 = time.monotonic()
     from vla.policy import SonicPolicy
 
-    policy = SonicPolicy(config.checkpoint, device=config.device)
+    policy = SonicPolicy(
+        config.checkpoint, device=config.device, embodiment_tag=config.embodiment_tag
+    )
     print(f"checkpoint loaded in {time.monotonic() - t0:.1f}s")
 
     chunk = None
