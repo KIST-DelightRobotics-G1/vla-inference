@@ -16,4 +16,6 @@ The previous runtime was removed 2026-08-27 — recover it from git history
     chunking/     ~2.5 Hz ActionChunks -> one ChunkStep per 50 Hz tick
                   (swap-in with staleness skip, bounded hold, then silence)
     publisher/    the live 50 Hz Tx thread onto rt/kist/latent_action
+    runner.py     the assembly: one participant for the Rx sources, the
+                  back-to-back inference loop, lifecycle (scripts/run_vla.py)
 """

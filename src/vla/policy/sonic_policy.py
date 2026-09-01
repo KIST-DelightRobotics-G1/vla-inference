@@ -43,6 +43,11 @@ class SonicPolicy:
         self._policy = Gr00tPolicy(embodiment_tag, checkpoint_path, device=device)
         self._language_key = self._policy.language_key
 
+    @property
+    def video_views(self) -> list[str]:
+        """The camera views this checkpoint requires, in modality order."""
+        return list(self._policy.modality_configs["video"].modality_keys)
+
     def predict(self, observation: Observation) -> ActionChunk:
         """One inference: fresh Observation -> decoded 40-step ActionChunk."""
         gr00t_observation = to_gr00t_observation(observation, self._language_key)
