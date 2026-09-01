@@ -23,11 +23,25 @@ set -euo pipefail
 
 CONTAINER=kist-vla-inference
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CHECKPOINT_DIR_GIVEN="${CHECKPOINT_DIR+x}"   # user set it (before the default fills in)
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${HOME}/checkpoint-4500}"
 
+# Mounts only apply at container CREATION: re-attaching ignores
+# CHECKPOINT_DIR, so warn instead of silently running the wrong checkpoint.
+warn_reuse() {
+    if [ -n "${CHECKPOINT_DIR_GIVEN}" ]; then
+        echo "WARNING: reusing the existing '${CONTAINER}' container — its mounts" >&2
+        echo "         were fixed at creation and CHECKPOINT_DIR is IGNORED now." >&2
+        echo "         To mount ${CHECKPOINT_DIR}:" >&2
+        echo "         docker rm -f ${CONTAINER}  # then re-run this script" >&2
+    fi
+}
+
 if [ "$(docker ps -q -f name=^${CONTAINER}$)" ]; then
+    warn_reuse
     exec docker exec -it "${CONTAINER}" /bin/bash
 elif [ "$(docker ps -aq -f name=^${CONTAINER}$)" ]; then
+    warn_reuse
     docker start "${CONTAINER}" >/dev/null
     exec docker exec -it "${CONTAINER}" /bin/bash
 fi
