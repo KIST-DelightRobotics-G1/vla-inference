@@ -13,4 +13,7 @@ The previous runtime was removed 2026-08-27 — recover it from git history
                   per-stream staleness is judged here
     policy/       Observation -> action chunk; carries the vendored GR00T
                   N1.7 inference core (extracted from Isaac-GR00T@5ac4e6b)
+    chunking/     ~2.5 Hz ActionChunks -> one ChunkStep per 50 Hz tick
+                  (swap-in with staleness skip, bounded hold, then silence)
+    publisher/    the live 50 Hz Tx thread onto rt/kist/latent_action
 """
