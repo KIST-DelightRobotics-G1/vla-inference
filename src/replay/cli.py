@@ -36,9 +36,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from common.config import DEFAULT_INITIAL_MOTION_TOKEN
-from common.cyclonedds.config import apply_cyclonedds_xml, load_dds_config
-from common.g1_joints import OPEN_HAND_Q
+from common.config import (
+    DEFAULT_INITIAL_LEFT_HAND_Q,
+    DEFAULT_INITIAL_MOTION_TOKEN,
+    DEFAULT_INITIAL_RIGHT_HAND_Q,
+)
+from common.cyclonedds.config import load_dds_config
 
 from .aligner import align_joints, align_tokens
 from .constants import CONTROL_DT_NS
@@ -75,9 +78,8 @@ class Config:
     collector CSV sessions encode lowstate.csv q+dq on the token grid."""
 
     config: str = "config/config.yaml"
-    """Network settings: dds.domain_id + the CycloneDDS transport XML it
-    points at (dds.cyclonedds_xml — NIC, socket buffers). A missing file at
-    this default path falls back to built-in defaults."""
+    """Network settings (dds: domain_id, network_interface) — gearsonic-style.
+    A missing file at this default path falls back to built-in defaults."""
 
     domain: int | None = None
     """DDS domain id override (must match the gearsonic receiver). Default:
@@ -109,7 +111,7 @@ def _require_encoder() -> None:
         raise SystemExit(
             f"{ENCODER_ONNX} not found — the docker image bakes it in; on a "
             f"host checkout: wget -P models "
-            f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/model_encoder.onnx"
+            f"https://huggingface.co/nvidia/GEAR-SONIC/resolve/main/sonic_v1_1/model_encoder.onnx"
         )
 
 
@@ -119,7 +121,8 @@ def build_stream(timeline: Timeline, config: Config) -> ActionStream:
     return bracket_timeline(
         timeline,
         DEFAULT_INITIAL_MOTION_TOKEN,
-        OPEN_HAND_Q,
+        DEFAULT_INITIAL_LEFT_HAND_Q,
+        DEFAULT_INITIAL_RIGHT_HAND_Q,
         lead_in_ticks=round(config.lead_in_s * rate),
         lead_out_ticks=round(config.lead_out_s * rate),
         blend_ticks=round(config.blend_s * rate),
@@ -174,14 +177,15 @@ def main(config: Config) -> None:
         sys.exit(1)
 
     dds_cfg = load_dds_config(config.config)
-    apply_cyclonedds_xml(dds_cfg.cyclonedds_xml)
     domain = config.domain if config.domain is not None else dds_cfg.domain_id
 
     # Main thread = lifecycle only: the publisher owns the channel and the
     # Tx worker thread (ext-sensor-io transmitter pattern).
     print("THE ROBOT MOVES NOW — VR e-stop is A+B+X+Y held 1s.")
     publisher = LatentActionPublisher()
-    publisher.start(stream, domain_id=domain)
+    publisher.start(
+        stream, domain_id=domain, network_interface=dds_cfg.network_interface
+    )
     try:
         publisher.wait()
     except KeyboardInterrupt:

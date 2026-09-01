@@ -24,18 +24,20 @@ Usage (host venv or replay container):
 
 import glob
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import tyro
 
 from replay.encoder import encoder as enc
-from replay.io.parquet_io import read_joints
+from replay.io import csv_io, parquet_io
 
 
 @dataclass
 class Config:
     data: str = "shared/data/chunk-000"
-    """Directory of LeRobot episode parquets."""
+    """A collector session directory (contains lowstate.csv), or a directory
+    of LeRobot episode parquets."""
 
     encoder: str = "models/model_encoder.onnx"
     """SONIC encoder ONNX — must be the checkpoint gearsonic decodes with."""
@@ -49,20 +51,24 @@ class Config:
 
 def main(config: Config) -> None:
     encoder = enc.load_onnx_encoder(config.encoder)
-    paths = sorted(glob.glob(f"{config.data}/episode_*.parquet"))[: config.episodes]
+    if (Path(config.data) / "lowstate.csv").exists():
+        paths = [config.data]  # one collector session
+    else:
+        paths = sorted(glob.glob(f"{config.data}/episode_*.parquet"))[: config.episodes]
     if not paths:
-        raise SystemExit(f"no episodes under {config.data}")
+        raise SystemExit(f"no session/episodes under {config.data}")
 
     results = []
     for path in paths:
-        joints = read_joints(path)
+        reader = csv_io if (Path(path) / "lowstate.csv").exists() else parquet_io
+        joints = reader.read_joints(path)
         q, base_quat = joints.q, joints.base_quat
         W = config.window
         # The calmest window near the episode start (a balancing humanoid
         # always sways a few hundredths of a radian — that IS standing).
         sway, start = min(
             (np.abs(q[i : i + W] - q[i : i + W].mean(0)).max(), i)
-            for i in range(0, min(len(q) - W, 400), 10)
+            for i in range(0, len(q) - W, 10)
         )
         q_bar = q[start : start + W].mean(0)
         quat_bar = base_quat[start : start + W].mean(0)
