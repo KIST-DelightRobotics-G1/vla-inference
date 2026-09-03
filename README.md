@@ -90,6 +90,27 @@ token stream switches it to external-token mode. Hang the robot or clear
 the area, keep the VR controller in reach (A+B+X+Y held 1s = emergency
 stop).
 
+#### VLA inference
+
+Runs GR00T inference on the robot (cameras + state → 50 Hz motion tokens);
+gearsonic and ext-sensor-io must be up. Checkpoints live under
+`shared/` (mounted into the container at
+`/workspace/kist-vla-inference/shared`):
+
+```bash
+python scripts/run_vla.py \
+    --checkpoint /workspace/kist-vla-inference/shared/trim0902_9k_step7500 \
+    --embodiment-tag unitree_g1_sonic \
+    --prompt "Open the fridge door with the right hand."
+```
+
+`--prompt` must be the checkpoint's training instruction, and
+`--embodiment-tag` one of the tags in its `processor_config.json` — the
+tag's modality config (not its name) decides the camera views; this
+checkpoint's `unitree_g1_sonic` is a 3-view config (`ego_view`,
+`left_wrist`, `right_wrist`). To validate a checkpoint without moving the
+robot, run the same arguments through `tests/smoke_policy.py` first.
+
 #### Session replay
 
 Replays a [kist-data-collector](https://github.com/Safety-Node/kist-data-collector)
