@@ -48,6 +48,11 @@ class SonicPolicy:
         """The camera views this checkpoint requires, in modality order."""
         return list(self._policy.modality_configs["video"].modality_keys)
 
+    @property
+    def torch_model(self):
+        """The underlying Gr00tN1d7 torch model (e.g. for probe hooks)."""
+        return self._policy.model
+
     def predict(self, observation: Observation) -> ActionChunk:
         """One inference: fresh Observation -> decoded 40-step ActionChunk."""
         gr00t_observation = to_gr00t_observation(observation, self._language_key)

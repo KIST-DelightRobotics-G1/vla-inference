@@ -82,6 +82,14 @@ class Config:
     report_s: float = 2.0
     """Seconds between status lines (inference latency, cursor health)."""
 
+    probe: str | None = None
+    """Progress-probe .pt path (e.g. /data/vla/progress_probe/probe_succ3v.pt).
+    Only valid with the checkpoint it was fitted on — the probe prints its
+    extractor on load. None disables the probe entirely."""
+
+    probe_dir: str = "shared/probe"
+    """Where the per-rollout progress JSONL goes (host-mounted via shared/)."""
+
 
 def main(config: Config) -> None:
     dds_cfg = load_dds_config(config.config)
@@ -101,6 +109,18 @@ def main(config: Config) -> None:
             f"{missing} (ext-sensor-io camera name needed)"
         )
     print(f"Checkpoint views: {views}")
+
+    # Progress probe (optional): hooks the DiT latent inside predict() —
+    # the score is a free byproduct of each inference, logged per rollout.
+    probe = None
+    progress_log = None
+    if config.probe is not None:
+        from .progress_probe import ProgressLog, ProgressProbe
+
+        probe = ProgressProbe(config.probe)
+        probe.check_prompt(config.prompt)
+        probe.attach(policy.torch_model)
+        progress_log = ProgressLog(config.probe_dir)
 
     # One participant for every Rx source (ChannelFactory convention); the
     # streamer's writer owns its Tx side separately.
@@ -152,13 +172,24 @@ def main(config: Config) -> None:
             elapsed = time.monotonic() - t0
             cursor.push(chunk, skip_ticks=round(elapsed / tick_s))
 
+            progress = None
+            if probe is not None:
+                # The hook fired inside predict(); this is that
+                # observation's score. One dot product — negligible.
+                progress = probe.read()
+                progress_log.append(progress, elapsed * 1e3)
+
             latency_sum += elapsed
             predictions += 1
             if t0 - last_report >= config.report_s:
                 stats = cursor.stats()
+                progress_part = (
+                    "" if probe is None else f"progress {progress:.2f} | "
+                )
                 print(
                     f"inference {latency_sum / predictions * 1e3:.0f}ms avg "
                     f"({predictions / (t0 - last_report):.1f}/s) | "
+                    f"{progress_part}"
                     f"published {streamer.published} | held {stats['held']} "
                     f"starved {stats['starved']} stale {stats['stale_pushes']} "
                     f"late {streamer.late}",
@@ -174,6 +205,9 @@ def main(config: Config) -> None:
         for camera in cameras.values():
             camera.stop()
         state_reader.stop()
+        if probe is not None:
+            probe.detach()
+            progress_log.close()
 
 
 if __name__ == "__main__":
