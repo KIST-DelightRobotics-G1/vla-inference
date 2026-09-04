@@ -18,7 +18,6 @@ import time
 # The topic constant is a plain string in the wire-contract module —
 # importing it does not pull in cyclonedds (that stays lazy inside start()).
 from common.cyclonedds.kist_msgs import LATENT_ACTION_TOPIC
-from common.cyclonedds.config import apply_network_interface
 
 from ..constants import CONTROL_DT_NS
 from ..builder import ActionStream
@@ -80,7 +79,7 @@ class LatentActionPublisher:
     Lifecycle (mirroring ext-sensor-io's ColorPublisher):
 
         pub = LatentActionPublisher()
-        pub.start(stream, domain_id=0, network_interface="lo")
+        pub.start(stream, domain_id=0)
         pub.wait()      # main thread just waits; Ctrl+C interrupts here
         pub.stop()      # idempotent: joins the thread, closes the channel
 
@@ -99,7 +98,6 @@ class LatentActionPublisher:
         stream: ActionStream,
         *,
         domain_id: int,
-        network_interface: str = "",
         topic: str = LATENT_ACTION_TOPIC,
         writer=None,
     ) -> None:
@@ -117,7 +115,6 @@ class LatentActionPublisher:
         if writer is None:
             from common.cyclonedds.kist_msgs_writer import KistMsgsWriter
 
-            apply_network_interface(network_interface)
             writer = KistMsgsWriter(domain_id=domain_id, action_topic=topic)
             print(f"Publishing {topic} @ 50 Hz on DDS domain {domain_id}")
         self._writer = writer

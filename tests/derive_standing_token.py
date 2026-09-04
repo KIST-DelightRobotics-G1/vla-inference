@@ -17,6 +17,10 @@ The tokens differ between episodes (each session's stance differs slightly);
 pick the one from the calmest window — and HARDWARE-VERIFY it (stream the
 token, watch the robot stand) before trusting the recovery path.
 
+The source recording must be a pose the robot held while BALANCING ON THE
+GROUND: a hung robot's stance (near-zero joint jitter is the tell) encodes
+a token that failed live (2026-09-01 — the whole bracketed replay froze).
+
 Usage (host venv or replay container):
     python tests/derive_standing_token.py
     python tests/derive_standing_token.py --data shared/data/chunk-000 --episodes 8

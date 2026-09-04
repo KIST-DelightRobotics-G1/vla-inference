@@ -1,4 +1,4 @@
-# Network configuration for the KIST VLA / replay publishers.
+# Network configuration for the KIST VLA / replay publishers and readers.
 # Loaded by src/common/cyclonedds/config.py; CLI flags override these values.
 
 dds:
@@ -6,10 +6,8 @@ dds:
   # any other id isolates a test bus, e.g. 42 for the vla_receiver_probe).
   domain_id: 0
 
-  # Network interface toward the DDS peers (e.g. eno2, eth0); "lo" for
-  # same-machine work. Empty ("") lets CycloneDDS pick. NOTE: multicast
-  # discovery on 'lo' has failed before on this stack (2026-08-10, unitree
-  # SDK interop) — if peers don't discover each other, switch to the
-  # machine's default interface.
-  # Applied via CYCLONEDDS_URI; an already-set CYCLONEDDS_URI env var wins.
-  network_interface: "lo"
+  # CycloneDDS transport config (XML): the network interface AND the
+  # socket-buffer tuning live THERE — edit config/cyclonedds.xml to change
+  # the NIC. Applied via CYCLONEDDS_URI; an already-set CYCLONEDDS_URI env
+  # var wins.
+  cyclonedds_xml: config/cyclonedds.xml

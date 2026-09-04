@@ -1,7 +1,21 @@
-"""KIST GR00T N1.7 VLA inference service.
+"""GR00T N1.7 VLA inference — rebuilt as a stage pipeline (in progress).
 
-Runs an Isaac-GR00T N1.7 policy (UNITREE_G1_SONIC embodiment) and streams
-64-dim SONIC motion tokens + hand joints to the kist-gearsonic-inference
-C++ whole-body controller (50 Hz publish loop in `runner`, policy backends
-in `policy_backend`).
+Being rebuilt from scratch on the replay package's principles (stage
+folders are the data flow, one dataclass contract between stages, only
+inference-reachable code) instead of wrapping the whole Isaac-GR00T repo.
+The previous runtime was removed 2026-08-27 — recover it from git history
+(src/vla_old/) if a reference is needed.
+
+    io/           the input sources: cameras (ext-sensor-io H.264 over
+                  DDS, N views) and robot state (unitree rt/lowstate +
+                  rt/dex3/*), each exposing latest*() -> (snapshot, age)
+    observation/  fresh io snapshots -> Observation (the policy's input);
+                  per-stream staleness is judged here
+    policy/       Observation -> action chunk; carries the vendored GR00T
+                  N1.7 inference core (extracted from Isaac-GR00T@5ac4e6b)
+    chunking/     ~2.5 Hz ActionChunks -> one ChunkStep per 50 Hz tick
+                  (swap-in with staleness skip, bounded hold, then silence)
+    publisher/    the live 50 Hz Tx thread onto rt/kist/latent_action
+    runner.py     the assembly: one participant for the Rx sources, the
+                  back-to-back inference loop, lifecycle (scripts/run_vla.py)
 """

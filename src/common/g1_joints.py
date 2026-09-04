@@ -56,8 +56,13 @@ BODY_ACTUATED_INDICES = [
     29, 30, 31, 32, 33, 34, 35,  # right arm
 ]
 
-# hand_q[i] (Dex motor order: thumb×3, index×2, middle×2) lands at
-# full_q[*_HAND_ACTUATED_INDICES[i]].
+# hand_q[i] (Dex wire order) lands at full_q[*_HAND_ACTUATED_INDICES[i]].
+# The reference labels the wire order thumb×3, index×2, middle×2; measured
+# on the real hands (2026-08-28) the two fingers are physically SWAPPED
+# (q[3:5] is the middle-position finger, q[5:7] the index-position one).
+# The mapping stays as the reference defined it: training data and
+# inference share this convention, and the checkpoint learned the wire
+# slots, not the finger names — do not "fix" it.
 LEFT_HAND_ACTUATED_INDICES = [26, 27, 28, 22, 23, 24, 25]
 RIGHT_HAND_ACTUATED_INDICES = [40, 41, 42, 36, 37, 38, 39]
 

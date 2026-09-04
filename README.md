@@ -14,7 +14,7 @@ on the Unitree G1 humanoid robot.
 |---|---|---|
 | Python | ≥ 3.10 (docker image: 3.12) | runtime |
 | numpy, tyro, pyyaml | PyPI | core runtime (installed automatically) |
-| `cyclonedds` | PyPI, `[dds]` extra | DDS publisher (the wheel bundles libddsc — no system install) |
+| `cyclonedds` | 0.10.2, `[dds]` extra | DDS transport — bindings built against a CycloneDDS 0.10.2 core (the robot bus's generation; the 11.x wheel's discovery TypeObject segfaults the 0.10.x receivers). The docker image builds it in a builder stage |
 | `pyarrow` | PyPI, `[parquet]` extra | LeRobot training-export episodes |
 | `onnxruntime` | PyPI, `[encode]` extra | joint re-encoding (CPU provider — no GPU) |
 | `pytest` | `[dev]` extra | tests |
@@ -51,10 +51,24 @@ numbered steps below (2–3) are the manual (non-Docker) alternative.
 
 #### 2. Create the virtualenv
 
+The `cyclonedds` bindings must be built against a 0.10.2 core (no 3.12
+wheel; see the Dependencies note):
+
 ```bash
+git clone --depth 1 -b 0.10.2 https://github.com/eclipse-cyclonedds/cyclonedds.git /tmp/cyclonedds
+cmake -S /tmp/cyclonedds -B /tmp/cyclonedds/build \
+    -DCMAKE_INSTALL_PREFIX=$HOME/.local/opt/cyclonedds-0.10.2 -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/cyclonedds/build --target install -j"$(nproc)"
+
 uv venv --python 3.12 && source .venv/bin/activate
-uv pip install -e ".[dds,parquet,encode,dev]"
+CYCLONEDDS_HOME=$HOME/.local/opt/cyclonedds-0.10.2 \
+    uv pip install --no-binary cyclonedds -e ".[dds,parquet,encode,vla,dev]"
 ```
+
+The bindings bake the core's path in at build time, so build them with the
+core already at its final location — and pass `--no-cache` when
+reinstalling after the core moved (uv would otherwise reuse a wheel built
+against the old path).
 
 #### 3. Download the encoder model
 
@@ -75,6 +89,27 @@ Set up the config once before running:
 token stream switches it to external-token mode. Hang the robot or clear
 the area, keep the VR controller in reach (A+B+X+Y held 1s = emergency
 stop).
+
+#### VLA inference
+
+Runs GR00T inference on the robot (cameras + state → 50 Hz motion tokens);
+gearsonic and ext-sensor-io must be up. Checkpoints live under
+`shared/` (mounted into the container at
+`/workspace/kist-vla-inference/shared`):
+
+```bash
+python scripts/run_vla.py \
+    --checkpoint /workspace/kist-vla-inference/shared/trim0902_9k_step7500 \
+    --embodiment-tag unitree_g1_sonic \
+    --prompt "Open the fridge door with the right hand."
+```
+
+`--prompt` must be the checkpoint's training instruction, and
+`--embodiment-tag` one of the tags in its `processor_config.json` — the
+tag's modality config (not its name) decides the camera views; this
+checkpoint's `unitree_g1_sonic` is a 3-view config (`ego_view`,
+`left_wrist`, `right_wrist`). To validate a checkpoint without moving the
+robot, run the same arguments through `tests/smoke_policy.py` first.
 
 #### Session replay
 

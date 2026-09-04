@@ -10,13 +10,21 @@ bakes it in. Loaded by `src/common/cyclonedds/config.py`.
 | Key | Default | Meaning |
 |---|---|---|
 | `domain_id` | `0` | DDS domain — must match the gearsonic receiver (`unitree.domain_id` on its side). `--domain` overrides it per run |
-| `network_interface` | `lo` | NIC toward the DDS peers (e.g. `eno2`, `eth0`) — must be the same interface gearsonic uses. `lo` for same-machine work; empty (`""`) lets CycloneDDS pick |
+| `cyclonedds_xml` | `config/cyclonedds.xml` | CycloneDDS transport config file — the network interface AND the tuning live there |
 
-`network_interface` is applied by exporting `CYCLONEDDS_URI` with an inline
-XML fragment; an already-set `CYCLONEDDS_URI` environment variable wins over
-the config file. Note: multicast discovery on `lo` has failed before on this
-stack (2026-08-10, unitree SDK interop) — if peers don't discover each
-other, switch to the machine's default interface.
+`config/cyclonedds.xml` (same convention as kist-ext-sensor-io) carries:
+
+- the NIC toward the DDS peers (`NetworkInterface name=...` — must be the
+  interface gearsonic/ext-sensor-io use; `lo` for same-machine work, but
+  multicast discovery on `lo` has failed before on this stack)
+- 16MiB socket buffers (H.264 bursts overflow the kernel defaults — also
+  raise `net.core.rmem_max`/`wmem_max` on the HOST, see the file's comment)
+- MTU-sized datagrams (`FragmentSize`/`MaxMessageSize`, parity with the
+  C++ peers)
+- a commented `Tracing` block for diagnosing what actually applied
+
+It is routed to CycloneDDS via `CYCLONEDDS_URI`; an already-set
+`CYCLONEDDS_URI` environment variable wins over the config.
 
 ## Replay parameters (CLI, not YAML)
 
