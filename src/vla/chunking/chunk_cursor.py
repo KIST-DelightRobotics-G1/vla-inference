@@ -23,6 +23,14 @@ inference), then `step()` returns None: the publisher goes silent, and
 Holding forever would keep a dead policy in command; the bounded hold makes
 a real failure end in the verified recovery path. A later push() resumes
 the stream — gearsonic re-claims from the origin, no restart needed.
+
+Freeze policy — `freeze()` is the INTENTIONAL hold, distinct from
+exhaustion: the cortex bridge calls it when a subtask ends (cancel,
+unsupported, timeout) and the robot should stand still in its last
+commanded posture instead of blending to safe standing. The last emitted
+step is pinned and returned every tick until the next push() — which is
+only sent once a new subtask is RUNNING, so the pin cannot mask a dead
+policy mid-task (exhaustion during RUNNING still ends in recovery).
 """
 
 import threading
@@ -50,6 +58,7 @@ class ChunkCursor:
         self._cursor = 0
         self._held = 0
         self._hold_ticks = hold_ticks
+        self._pinned: int | None = None
         self._stats = {
             "pushes": 0,
             "stale_pushes": 0,
@@ -57,6 +66,7 @@ class ChunkCursor:
             "held": 0,
             "starved": 0,
             "skipped": 0,
+            "frozen": 0,
         }
 
     def push(self, chunk: ActionChunk, *, skip_ticks: int = 0) -> None:
@@ -73,6 +83,20 @@ class ChunkCursor:
             self._chunk = chunk
             self._cursor = skip_ticks
             self._held = 0
+            self._pinned = None
+
+    def freeze(self) -> None:
+        """Pin the last emitted step: every tick repeats it until a push().
+
+        The intentional stand-still between subtasks (docstring: freeze
+        policy). Before anything was emitted it pins step 0 of the current
+        chunk; with no chunk at all it is a no-op — the stream stays silent.
+        """
+        with self._lock:
+            if self._chunk is None:
+                return
+            horizon = len(self._chunk.motion_token)
+            self._pinned = min(max(self._cursor - 1, 0), horizon - 1)
 
     def step(self) -> ChunkStep | None:
         """The next tick's action — held past the end, None once given up."""
@@ -80,6 +104,11 @@ class ChunkCursor:
             if self._chunk is None:
                 self._stats["starved"] += 1
                 return None
+
+            if self._pinned is not None:
+                self._stats["frozen"] += 1
+                self._stats["steps"] += 1
+                return self._step_at(self._pinned)
 
             horizon = len(self._chunk.motion_token)
             index = self._cursor
@@ -94,11 +123,14 @@ class ChunkCursor:
                 self._cursor += 1
 
             self._stats["steps"] += 1
-            return ChunkStep(
-                motion_token=self._chunk.motion_token[index],
-                left_hand_joints=self._chunk.left_hand_joints[index],
-                right_hand_joints=self._chunk.right_hand_joints[index],
-            )
+            return self._step_at(index)
+
+    def _step_at(self, index: int) -> ChunkStep:
+        return ChunkStep(
+            motion_token=self._chunk.motion_token[index],
+            left_hand_joints=self._chunk.left_hand_joints[index],
+            right_hand_joints=self._chunk.right_hand_joints[index],
+        )
 
     def stats(self) -> dict:
         with self._lock:

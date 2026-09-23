@@ -53,7 +53,19 @@ class Config:
     """Finetuned checkpoint directory (mounted by docker/run.sh)."""
 
     prompt: str = DEFAULT_PROMPT
-    """Task instruction — MUST match the checkpoint's training string."""
+    """Task instruction — MUST match the checkpoint's training string.
+    With --cortex this is only the warmup prompt; live instructions come
+    from the orchestrator."""
+
+    cortex: bool = False
+    """Take instructions live from the cortex orchestrator
+    (/cortex/vla/cmd -> instruction, /cortex/vla/state <- 10 Hz status)
+    instead of the fixed --prompt. IDLE holds the last commanded posture."""
+
+    step_timeout_s: float = 0.0
+    """--cortex only: fail a RUNNING subtask after this many seconds
+    (detail "timeout <s>s", posture held). <= 0 disables (v0.1 default —
+    tune after real-robot measurement)."""
 
     embodiment_tag: str = "unitree_g1_sonic_3views"
     """Which of the checkpoint's embodiments to run."""
@@ -120,6 +132,14 @@ def main(config: Config) -> None:
     streamer = LatentActionStreamer()
     tick_s = CONTROL_DT_NS / 1e9
 
+    bridge = None
+    if config.cortex:
+        from .cortex import CortexBridge, SubtaskMachine
+
+        bridge = CortexBridge(
+            SubtaskMachine(step_timeout_s=config.step_timeout_s), cursor
+        )
+
     try:
         # Wait for the sensors, then warm up the model off-stream: the first
         # prediction pays CUDA init (~1 s) — better spent before gearsonic
@@ -134,14 +154,24 @@ def main(config: Config) -> None:
         policy.predict(observation)
 
         streamer.start(cursor, domain_id=domain)
-        print(f"Streaming — prompt: {config.prompt!r}")
+        if bridge is not None:
+            bridge.start(domain_id=domain)
+            print("Streaming — cortex mode: idle until the first SubtaskCmd")
+        else:
+            print(f"Streaming — prompt: {config.prompt!r}")
 
         last_report = time.monotonic()
         latency_sum = 0.0
         predictions = 0
         while True:
             t0 = time.monotonic()
-            observation = builder.build(config.prompt)
+            prompt = bridge.instruction() if bridge is not None else config.prompt
+            if prompt is None:
+                # No RUNNING subtask: the frozen cursor keeps the posture (or
+                # stays silent before the first task) — no inference to run.
+                time.sleep(tick_s)
+                continue
+            observation = builder.build(prompt)
             if observation is None:
                 # The builder already reported which stream is stale; the
                 # cursor plays out its horizon, then hands over to recovery.
@@ -149,6 +179,11 @@ def main(config: Config) -> None:
                 continue
 
             chunk = policy.predict(observation)
+            if bridge is not None and bridge.instruction() != prompt:
+                # The subtask was cancelled or preempted while this
+                # prediction was in flight: pushing it would unpin the
+                # frozen posture (or act on the old instruction) — drop it.
+                continue
             elapsed = time.monotonic() - t0
             cursor.push(chunk, skip_ticks=round(elapsed / tick_s))
 
@@ -170,6 +205,8 @@ def main(config: Config) -> None:
     except KeyboardInterrupt:
         print("\nStopping (gearsonic recovers to safe standing on stream loss)")
     finally:
+        if bridge is not None:
+            bridge.stop()
         streamer.stop()
         for camera in cameras.values():
             camera.stop()
