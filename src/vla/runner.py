@@ -152,13 +152,26 @@ def main(config: Config) -> None:
     streamer = LatentActionStreamer()
     tick_s = CONTROL_DT_NS / 1e9
 
+    # Cortex bridge (optional): DDS reader/writer + 10 Hz publisher around
+    # the SubtaskMachine. We hold the machine separately so the runner can
+    # feed it progress verdicts from the probe (see below).
+    machine = None
     bridge = None
     if config.cortex:
         from .cortex import CortexBridge, SubtaskMachine
 
-        bridge = CortexBridge(
-            SubtaskMachine(step_timeout_s=config.step_timeout_s), cursor
-        )
+        machine = SubtaskMachine(step_timeout_s=config.step_timeout_s)
+        bridge = CortexBridge(machine, cursor)
+
+    # Progress monitor (only when probe AND cortex are both on): turns the
+    # probe raw stream into a DONE/STALLED verdict for the machine. Reset
+    # on every new subtask so the running max doesn't carry over.
+    monitor = None
+    last_subtask_id: tuple[str, int] = ("", 0)
+    if probe is not None and machine is not None:
+        from .progress_probe import ProgressMonitor
+
+        monitor = ProgressMonitor()
 
     try:
         # Wait for the sensors, then warm up the model off-stream: the first
@@ -208,11 +221,25 @@ def main(config: Config) -> None:
             cursor.push(chunk, skip_ticks=round(elapsed / tick_s))
 
             progress = None
+            reading = None
             if probe is not None:
-                # The hook fired inside predict(); this is that
-                # observation's score. One dot product — negligible.
-                progress = probe.read()
-                progress_log.append(progress, elapsed * 1e3)
+                # The hook fired inside predict(); this is that observation's
+                # score. One dot product on GPU + .item() sync — negligible.
+                raw = probe.read()
+                if raw is not None and monitor is not None:
+                    # Detect new subtask so the running max doesn't carry over.
+                    current_subtask_id = machine.subtask_id()
+                    if current_subtask_id != last_subtask_id:
+                        monitor.reset()
+                        last_subtask_id = current_subtask_id
+                    now = time.monotonic()
+                    reading = monitor.update(raw, now)
+                    # Feed the verdict to the machine — DONE/STALLED transition.
+                    machine.on_progress(reading.state, reading.progress, now)
+                    progress = reading.progress
+                else:
+                    progress = raw
+                progress_log.append(progress, elapsed * 1e3, reading=reading)
 
             latency_sum += elapsed
             predictions += 1

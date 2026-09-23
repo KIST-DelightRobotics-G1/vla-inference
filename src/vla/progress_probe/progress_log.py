@@ -11,9 +11,15 @@ import os
 import time
 from datetime import datetime
 
+from .progress_state import Reading
+
 
 class ProgressLog:
-    """Append {"t", "progress", "latency_ms"} per prediction.
+    """Append one JSONL row per prediction.
+
+    Minimal schema (probe alone, no monitor): {"t", "progress", "latency_ms"}.
+    Extended schema (probe + monitor): + raw, slope_per_s, stalled, plateaued,
+    done, state — one row is enough to redraw a full progress timeline offline.
 
     Args:
         directory: where the file goes (created if missing).
@@ -26,17 +32,28 @@ class ProgressLog:
         self._file = open(self.path, "a", buffering=1)  # line-buffered
         print(f"[ProgressLog] -> {self.path}")
 
-    def append(self, progress: float | None, latency_ms: float) -> None:
-        self._file.write(
-            json.dumps(
-                {
-                    "t": round(time.time(), 3),
-                    "progress": None if progress is None else round(progress, 4),
-                    "latency_ms": round(latency_ms, 1),
-                }
+    def append(
+        self,
+        progress: float | None,
+        latency_ms: float,
+        *,
+        reading: Reading | None = None,
+    ) -> None:
+        entry: dict = {
+            "t": round(time.time(), 3),
+            "progress": None if progress is None else round(progress, 4),
+            "latency_ms": round(latency_ms, 1),
+        }
+        if reading is not None:
+            entry["raw"] = round(reading.raw, 4)
+            entry["slope_per_s"] = (
+                None if reading.slope_per_s is None else round(reading.slope_per_s, 4)
             )
-            + "\n"
-        )
+            entry["stalled"] = reading.stalled
+            entry["plateaued"] = reading.plateaued
+            entry["done"] = reading.done
+            entry["state"] = reading.state.value
+        self._file.write(json.dumps(entry) + "\n")
 
     def close(self) -> None:
         self._file.close()

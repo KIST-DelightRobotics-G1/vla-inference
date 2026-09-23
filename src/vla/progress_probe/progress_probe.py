@@ -4,7 +4,8 @@ A linear probe (ridge regression, nn.Linear(2048, 1) + feature statistics)
 fitted on the 2048-dim mean-pooled output of `action_head.vl_self_attention`
 — see vla_data/README.md §2. The heavy part is the VLA itself: a forward
 hook copies the latent out of the `get_action` forward that runs anyway,
-so `read()` after `predict()` costs one dot product on the CPU.
+so `read()` after `predict()` costs one dot product on the GPU (fused
+normalize + linear) plus one .item() sync.
 
 The probe is NOT standalone: its weights live in the latent space of the
 one checkpoint it was fitted against (`meta["extractor_checkpoint"]`, the
@@ -36,11 +37,18 @@ class ProgressProbe:
 
     def __init__(self, probe_path: str):
         payload = torch.load(probe_path, map_location="cpu", weights_only=False)
-        self._linear = torch.nn.Linear(FEATURE_DIM, 1)
-        self._linear.load_state_dict(payload["w"])
-        self._linear.eval()
-        self._mu = payload["mu"].float()
-        self._sd = payload["sd"].float()
+        linear = torch.nn.Linear(FEATURE_DIM, 1)
+        linear.load_state_dict(payload["w"])
+        linear.eval()
+        w = linear.weight.detach().squeeze(0).float()   # (2048,)
+        b = float(linear.bias.detach().item())
+        mu = payload["mu"].float()                       # (2048,)
+        sd = payload["sd"].float()                       # (2048,)
+        # Fuse (x - mu)/sd then Linear into ONE dot product:
+        #   y = w·((x-mu)/sd) + b = (w/sd)·x + (b - (w/sd)·mu)
+        # Saves 2048 subs + 2048 divs per read().
+        self._w_eff = (w / sd).contiguous()              # (2048,)
+        self._b_eff = b - float((self._w_eff * mu).sum().item())
         self.meta: dict = payload.get("meta", {})
         self._feature: torch.Tensor | None = None
         self._handle = None
@@ -66,9 +74,14 @@ class ProgressProbe:
 
         def grab(_module, _inputs, output):
             tensor = output[0] if isinstance(output, tuple) else output
-            # (B, seq, 2048) -> (2048,): mean over the sequence dim, exactly
-            # as the probe's features were extracted. .cpu() synchronizes.
-            self._feature = tensor.detach().float().mean(dim=1).squeeze(0).cpu()
+            # (B, seq, 2048) -> (2048,): stay on GPU (no .cpu() mid-forward).
+            # read() forces the sync at the end via .item() — this preserves
+            # CUDA overlap during predict().
+            feature = tensor.detach().float().mean(dim=1).squeeze(0)
+            # Lazy-move fused weights to the feature's device on first fire.
+            if self._w_eff.device != feature.device:
+                self._w_eff = self._w_eff.to(feature.device)
+            self._feature = feature
 
         self._handle = module.register_forward_hook(grab)
 
@@ -76,9 +89,9 @@ class ProgressProbe:
         """Progress of the latest prediction, or None before the first one."""
         if self._feature is None:
             return None
-        x = (self._feature - self._mu) / self._sd
         with torch.no_grad():
-            return float(self._linear(x).item())
+            # One dot product + bias. .item() drains the sync predict() left.
+            return float((self._w_eff @ self._feature).item()) + self._b_eff
 
     def detach(self) -> None:
         if self._handle is not None:
