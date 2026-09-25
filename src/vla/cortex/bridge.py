@@ -1,8 +1,9 @@
 """CortexBridge — the DDS plumbing around SubtaskMachine.
 
 Owns one thread and one participant, self-contained like the streamer's Tx
-side: a SubtaskCmd reader on /cortex/vla/cmd and a SubtaskState writer on
-/cortex/vla/state, both RELIABLE + KeepLast(10) per the ICD. The 10 Hz loop
+side: a SubtaskCmd reader on rt/cortex/vla/cmd and a SubtaskState writer on
+rt/cortex/vla/state, both RELIABLE + KeepLast(10) per the ICD. Those are the
+DDS names; the orchestrator is ROS 2 and calls them /cortex/vla/*. The 10 Hz loop
 does three things in order — drain commands into the machine, run its timer
 tick, publish the current state — and applies each transition's cursor
 effect (FREEZE pins the last posture; the next subtask's first push

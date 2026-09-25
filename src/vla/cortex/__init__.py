@@ -1,7 +1,7 @@
 """Cortex stage: the orchestrator's subtask protocol, module (VLA) side.
 
 The seam where task instructions arrive at runtime instead of a fixed
---prompt: the orchestrator publishes SubtaskCmd on /cortex/vla/cmd, this
+--prompt: the orchestrator publishes SubtaskCmd on rt/cortex/vla/cmd, this
 stage turns it into "which instruction should the inference loop run right
 now" and reports SubtaskState back at 10 Hz (idl/cortex_subtask.idl is the
 contract).

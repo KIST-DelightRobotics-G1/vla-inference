@@ -1,21 +1,33 @@
 // Cortex subtask contract between the orchestrator and its modules (nav, VLA).
-// v0.1 draft — mirrors the orchestrator ICD (to be moved to the docs-repo ICD;
-// until then THIS file is what both sides must codegen/mirror from). Python
-// mirror: src/common/cyclonedds/cortex_msgs.py — keep the two in sync.
+// v0.1 — mirrors the orchestrator ICD. Python mirror:
+// src/common/cyclonedds/cortex_msgs.py — keep the two in sync.
 //
-// Topics (spec-literal names, both RELIABLE + KeepLast(10)):
-//   "/cortex/vla/cmd"    SubtaskCmd,   orchestrator -> VLA, event-driven
-//   "/cortex/vla/state"  SubtaskState, VLA -> orchestrator, 10 Hz always
-//   (nav runs the same pair under /cortex/nav/*)
+// The orchestrator is a ROS 2 node, so its DDS names are the mangled ones. Both
+// the module nesting and the trailing underscore below exist for that reason:
+//
+//   ROS 2 type   cortex_msgs/msg/SubtaskCmd
+//   DDS type     cortex_msgs::msg::dds_::SubtaskCmd_    <- what must match here
+//   ROS 2 topic  /cortex/vla/cmd
+//   DDS topic    rt/cortex/vla/cmd                      <- note the rt/ prefix
+//
+// DDS matches endpoints on (topic name, type name) together, so both have to be
+// right or the two sides simply never see each other.
+//
+// Topics (both RELIABLE + KeepLast(10)):
+//   "rt/cortex/vla/cmd"    SubtaskCmd_,   orchestrator -> VLA, event-driven
+//   "rt/cortex/vla/state"  SubtaskState_, VLA -> orchestrator, 10 Hz always
+//   (nav runs the same pair under rt/cortex/nav/*)
 //
 // detail conventions (appendix A): "" | "cancelled" | "cancel_deferred: <why>"
 // | "cancelled_at_safe_point" | "preempt_deferred" | "unsupported: <why>"
 // | "timeout <s>s" | "estop" | free text for FAILED reasons.
 
 module cortex_msgs {
+module msg {
+module dds_ {
 
     // Orchestrator -> module. One subtask of a plan, or its cancellation.
-    struct SubtaskCmd {
+    struct SubtaskCmd_ {
         string          plan_id;     // p-<orch start epoch s>-<4-digit serial>
         unsigned short  index;       // position within the plan, from 0
         string          action;      // semantic action; nav: move_to only, VLA: the rest
@@ -25,7 +37,7 @@ module cortex_msgs {
     };
 
     // Module -> orchestrator, 10 Hz always (IDLE included).
-    struct SubtaskState {
+    struct SubtaskState_ {
         long long       stamp_ns;    // publish clock (epoch ns) — the ICD's header.stamp
         string          plan_id;     // reported plan; "" when IDLE
         unsigned short  index;       // reported index; 0 when IDLE
@@ -35,4 +47,6 @@ module cortex_msgs {
         string          detail;      // appendix-A conventions, human-readable
     };
 
+};
+};
 };
