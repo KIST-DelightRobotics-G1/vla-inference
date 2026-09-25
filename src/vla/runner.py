@@ -59,7 +59,7 @@ class Config:
 
     cortex: bool = False
     """Take instructions live from the cortex orchestrator
-    (/cortex/vla/cmd -> instruction, /cortex/vla/state <- 10 Hz status)
+    (rt/cortex/vla/cmd -> instruction, rt/cortex/vla/state <- 10 Hz status)
     instead of the fixed --prompt. IDLE holds the last commanded posture."""
 
     step_timeout_s: float = 0.0

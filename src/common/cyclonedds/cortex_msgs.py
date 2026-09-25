@@ -5,16 +5,21 @@ protocol (v0.1 draft, ICD pending). Same shape as ``kist_msgs.py``: topic
 names ride with the types, ``cyclonedds`` is imported lazily so the module
 stays importable without the [dds] extra.
 
-Topic names are spec-literal (``/cortex/vla/...``) — the orchestrator side
-must open exactly these strings; DDS endpoints match on (topic name, type)
-together.
+The orchestrator is a ROS 2 node, so both names here are the mangled ones it
+puts on the wire: the ``rt/`` topic prefix and the ``::msg::dds_::``/trailing
+underscore type name. DDS matches endpoints on (topic name, type name)
+together, so both have to be right or the two sides never see each other.
+
+    ROS 2 side                     DDS wire name
+    /cortex/vla/cmd                rt/cortex/vla/cmd
+    cortex_msgs/msg/SubtaskCmd     cortex_msgs::msg::dds_::SubtaskCmd_
 """
 
 from dataclasses import dataclass
 from enum import IntEnum
 
-CORTEX_VLA_CMD_TOPIC = "/cortex/vla/cmd"
-CORTEX_VLA_STATE_TOPIC = "/cortex/vla/state"
+CORTEX_VLA_CMD_TOPIC = "rt/cortex/vla/cmd"
+CORTEX_VLA_STATE_TOPIC = "rt/cortex/vla/state"
 
 # SubtaskState publish rate (the ICD's "10 Hz 상시").
 STATE_PERIOD_S = 0.1
@@ -33,7 +38,7 @@ def _idl_types():
     import cyclonedds.idl.types as t
 
     @dataclass
-    class SubtaskCmd(IdlStruct, typename="cortex_msgs::SubtaskCmd"):
+    class SubtaskCmd(IdlStruct, typename="cortex_msgs::msg::dds_::SubtaskCmd_"):
         plan_id: str
         index: t.uint16
         action: str
@@ -42,7 +47,7 @@ def _idl_types():
         cancel: bool
 
     @dataclass
-    class SubtaskState(IdlStruct, typename="cortex_msgs::SubtaskState"):
+    class SubtaskState(IdlStruct, typename="cortex_msgs::msg::dds_::SubtaskState_"):
         stamp_ns: t.int64
         plan_id: str
         index: t.uint16
