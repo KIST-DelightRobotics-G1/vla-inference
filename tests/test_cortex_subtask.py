@@ -255,3 +255,12 @@ def test_wire_names_match_ros2_mangling():
     for token in ("module cortex_msgs", "module msg", "module dds_",
                   "struct SubtaskCmd_", "struct SubtaskState_"):
         assert token in idl, token
+
+
+def test_camera_type_name_matches_ext_sensor_io():
+    """ext-sensor-io 가 카메라 타입을 ROS 2 형식 이름으로 낸다 (cortex 가 ROS 로 바로 읽도록).
+    같은 토픽을 읽는 이쪽도 이름이 같아야 한다 — 다르면 프레임이 조용히 안 온다."""
+    from vla.io.realsense import color_subscriber as c
+
+    src = io.open(c.__file__, encoding="utf-8").read()
+    assert 'typename="kist_msgs::msg::dds_::CompressedColorFrame_"' in src
