@@ -10,10 +10,13 @@
                        line-buffered so an interrupted run keeps its record
 
 Optional: the runner only builds these when --probe is given.
+
+ProgressProbe is resolved lazily: it imports torch, and SubtaskMachine
+imports ProgressState from here — the pure-logic side (state machine,
+monitor, tests, tests/drive_progress_probe.py) must load without torch.
 """
 
 from .progress_log import ProgressLog
-from .progress_probe import ProgressProbe
 from .progress_state import ProgressMonitor, ProgressState, Reading
 
 __all__ = [
@@ -23,3 +26,11 @@ __all__ = [
     "ProgressState",
     "Reading",
 ]
+
+
+def __getattr__(name: str):
+    if name == "ProgressProbe":
+        from .progress_probe import ProgressProbe
+
+        return ProgressProbe
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

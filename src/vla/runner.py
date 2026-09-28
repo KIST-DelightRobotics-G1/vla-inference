@@ -158,7 +158,7 @@ def main(config: Config) -> None:
     machine = None
     bridge = None
     if config.cortex:
-        from .cortex import CortexBridge, SubtaskMachine
+        from .cortex import CortexBridge, Effect, SubtaskMachine
 
         machine = SubtaskMachine(step_timeout_s=config.step_timeout_s)
         bridge = CortexBridge(machine, cursor)
@@ -235,7 +235,12 @@ def main(config: Config) -> None:
                     now = time.monotonic()
                     reading = monitor.update(raw, now)
                     # Feed the verdict to the machine — DONE/STALLED transition.
-                    machine.on_progress(reading.state, reading.progress, now)
+                    # Apply its cursor effect exactly as the bridge does for
+                    # cancel/timeout: FREEZE pins the last posture, otherwise
+                    # the chunk runs out and gearsonic blends to safe standing.
+                    effect = machine.on_progress(reading.state, reading.progress, now)
+                    if effect is Effect.FREEZE:
+                        cursor.freeze()
                     progress = reading.progress
                 else:
                     progress = raw
