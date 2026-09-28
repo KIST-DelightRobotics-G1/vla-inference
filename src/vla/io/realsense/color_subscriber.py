@@ -37,15 +37,17 @@ _frame_type_cache = None
 
 def _compressed_color_frame_type():
     """CompressedColorFrame IdlStruct mirroring kist-ext-sensor-io's
-    idl/kist_camera_frames.idl — keep in sync with that repo. Lazy so this
-    module imports without cyclonedds."""
+    idl/kist_camera_frames.idl — keep in sync with that repo. The type name is
+    the ROS 2 form (kist_msgs::msg::dds_::..._) so ROS nodes (cortex) read the
+    same topic; DDS matches on it, so it must equal ext-sensor-io's exactly.
+    Lazy so this module imports without cyclonedds."""
     global _frame_type_cache
     if _frame_type_cache is None:
         from cyclonedds.idl import IdlStruct
         import cyclonedds.idl.types as t
 
         @dataclass
-        class CompressedColorFrame(IdlStruct, typename="kist_msgs::CompressedColorFrame"):
+        class CompressedColorFrame(IdlStruct, typename="kist_msgs::msg::dds_::CompressedColorFrame_"):
             width: t.uint32
             height: t.uint32
             seq: t.uint64
