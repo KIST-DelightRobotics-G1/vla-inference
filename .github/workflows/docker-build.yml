@@ -1,0 +1,47 @@
+name: Docker build
+
+# Builds the `replay` target of docker/Dockerfile on every PR and push to main,
+# then runs the whole test suite inside it — so a broken build or a failing test
+# shows up on the PR instead of after the merge. Build only: nothing is pushed.
+#
+# Why `replay` and not the default `vla` target: `vla` bakes the gated
+# nvidia/Cosmos-Reason2-2B backbone from the host HF cache (build.sh's
+# --build-context) and a ~10 GB CUDA torch stack; neither fits a hosted runner.
+# `replay` shares the same base stage (CycloneDDS 0.10.2 core + Python binding,
+# unitree_sdk2py, the pinned CPU deps) and every test in tests/ passes in it.
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    name: image (replay target) + tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build docker/Dockerfile --target replay
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: replay
+          tags: kist-vla-inference:replay
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run tests/ in the image
+        run: docker run --rm kist-vla-inference:replay python -m pytest -q tests/
