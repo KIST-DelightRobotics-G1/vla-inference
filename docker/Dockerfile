@@ -38,7 +38,7 @@ RUN git clone --depth 1 --branch "${CYCLONEDDS_VERSION}" \
     cmake --build /tmp/cyclonedds/build --target install -j "$(nproc)" && \
     rm -rf /tmp/cyclonedds
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /uvx /usr/local/bin/
 RUN uv venv /opt/wheelenv --python 3.12 && \
     VIRTUAL_ENV=/opt/wheelenv uv pip install pip && \
     CYCLONEDDS_HOME=/opt/cyclonedds /opt/wheelenv/bin/python -m pip wheel \
@@ -74,7 +74,7 @@ COPY --from=dds-builder /wheels /wheels
 ENV CYCLONEDDS_HOME=/opt/cyclonedds
 
 # ─── python 3.12 venv (uv) ────────────────────────────────────────────────────
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:${PATH}
 RUN uv venv /opt/venv --python 3.12
 
