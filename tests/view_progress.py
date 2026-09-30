@@ -8,7 +8,7 @@ subscribes to the same camera topics with its own ColorSubscribers.
 
     ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┓   one black-framed strip,
     ┃ left_wrist  ┃  ego_view   ┃ right_wrist ┃   views joined edge to edge,
-    ┗━━━━━━━━━━━━━┻━━━━━━━━━━━━━┻━━━━━━━━━━━━━┛   --fps (default 5)
+    ┗━━━━━━━━━━━━━┻━━━━━━━━━━━━━┻━━━━━━━━━━━━━┛   --fps (default 10)
     ┌─────────────────────────────────────────┐
     │ progress  thin grey: raw (7 Hz)         │   ▒ grey zone stuck..done
     │           bold blue: ProgressMonitor    │   | DONE (green) / STALLED (red)
@@ -97,8 +97,10 @@ class Config:
     no_cameras: bool = False
     """Plot only — no DDS at all."""
 
-    fps: float = 5.0
-    """Camera panel refresh rate."""
+    fps: float = 10.0
+    """Camera strip refresh rate. 10 Hz keeps the strip's average display lag
+    (half the period + decode) under ~100 ms; decode cost is unchanged by
+    this (every H.264 frame is decoded anyway), only compose+paint scales."""
 
     window_s: float = 60.0
     """Visible time window while auto-scrolling."""
