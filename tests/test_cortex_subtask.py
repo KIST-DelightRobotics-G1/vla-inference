@@ -5,6 +5,7 @@ tick by tick, and the bridge runs one cycle against injected fake DDS
 endpoints — no network anywhere.
 """
 
+import io
 import numpy as np
 
 from common.cyclonedds.cortex_msgs import SubtaskStatus
@@ -234,3 +235,32 @@ def test_bridge_cycle_applies_cmd_and_publishes_state():
     # the freeze landed: the cursor repeats the last emitted step
     assert cursor.step().motion_token[0] == 0
     assert cursor.stats()["frozen"] == 1
+
+def test_wire_names_match_ros2_mangling():
+    """오케스트레이터가 ROS 2 라서 DDS 이름이 변형된다. 둘 다 맞아야 엔드포인트가 붙는다.
+
+    cyclonedds 가 없어도 돌도록 상수와 소스 문자열만 본다 — 여기가 어긋나면
+    두 쪽이 서로를 아예 못 본 채 조용히 아무 일도 일어나지 않는다.
+    """
+    from common.cyclonedds import cortex_msgs as m
+
+    assert m.CORTEX_VLA_CMD_TOPIC == "rt/cortex/vla/cmd"
+    assert m.CORTEX_VLA_STATE_TOPIC == "rt/cortex/vla/state"
+
+    src = io.open(m.__file__, encoding="utf-8").read()
+    assert 'typename="cortex_msgs::msg::dds_::SubtaskCmd_"' in src
+    assert 'typename="cortex_msgs::msg::dds_::SubtaskState_"' in src
+
+    idl = io.open("idl/cortex_subtask.idl", encoding="utf-8").read()
+    for token in ("module cortex_msgs", "module msg", "module dds_",
+                  "struct SubtaskCmd_", "struct SubtaskState_"):
+        assert token in idl, token
+
+
+def test_camera_type_name_matches_ext_sensor_io():
+    """ext-sensor-io 가 카메라 타입을 ROS 2 형식 이름으로 낸다 (cortex 가 ROS 로 바로 읽도록).
+    같은 토픽을 읽는 이쪽도 이름이 같아야 한다 — 다르면 프레임이 조용히 안 온다."""
+    from vla.io.realsense import color_subscriber as c
+
+    src = io.open(c.__file__, encoding="utf-8").read()
+    assert 'typename="kist_msgs::msg::dds_::CompressedColorFrame_"' in src

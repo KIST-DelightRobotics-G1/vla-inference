@@ -1,7 +1,7 @@
 """RealSense color streams over DDS — one subscriber (and decode thread) per view.
 
 kist-ext-sensor-io owns the cameras and publishes H.264 Annex-B NAL units
-as `kist_msgs::CompressedColorFrame` on `rt/kist/camera[/<name>]/color/h264`.
+as `kist_msgs::msg::dds_::CompressedColorFrame_` on `rt/kist/camera[/<name>]/color/h264`.
 
     color_subscriber.py  ColorSubscriber — owns the DDS reader and a
                           decode thread (H.264 delta frames must be decoded
