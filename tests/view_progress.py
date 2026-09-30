@@ -6,9 +6,10 @@ A second process next to run_vla.py --probe. It never touches the runner:
 it tails the runner's progress JSONL (shared/probe/, host-mounted) and
 subscribes to the same camera topics with its own ColorSubscribers.
 
-    ┌─────────────┬─────────────┬─────────────┐
-    │  ego_view   │ left_wrist  │ right_wrist │   --fps (default 5)
-    ├─────────────┴─────────────┴─────────────┤
+    ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┓   one black-framed strip,
+    ┃ left_wrist  ┃  ego_view   ┃ right_wrist ┃   views joined edge to edge,
+    ┗━━━━━━━━━━━━━┻━━━━━━━━━━━━━┻━━━━━━━━━━━━━┛   --fps (default 5)
+    ┌─────────────────────────────────────────┐
     │ progress  thin grey: raw (7 Hz)         │   ▒ grey zone stuck..done
     │           bold blue: ProgressMonitor    │   | DONE (green) / STALLED (red)
     │           dashed:   runner's own progress (when logged)   ● s / ● f
@@ -56,6 +57,17 @@ from vla.progress_probe import ProgressMonitor, ProgressState
 
 TAIL_MS = 20            # JSONL poll period
 NEWER_FILE_CHECK_S = 1.0
+STRIP_SEP_PX = 4        # black seam between camera views in the strip
+STRIP_FRAME_PX = 6      # black frame around the whole strip
+
+
+def _fit_height(rgb: np.ndarray, height: int) -> np.ndarray:
+    """Nearest-neighbour resize to `height` keeping aspect (views of unequal size)."""
+    h, w = rgb.shape[:2]
+    new_w = max(1, round(w * height / h))
+    ys = (np.arange(height) * h // height)
+    xs = (np.arange(new_w) * w // new_w)
+    return rgb[ys][:, xs]
 
 
 @dataclass
@@ -212,6 +224,7 @@ class Marks:
 
 # ── the window ───────────────────────────────────────────────────────────────
 
+GROUND = (22, 25, 31)   # window ground: dark grey, so the strip's black frame shows
 GREY = (150, 150, 150)
 BLUE = (60, 140, 255)
 GREEN = (60, 200, 90)
@@ -239,22 +252,31 @@ class ProgressViewer(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         self.glw = pg.GraphicsLayoutWidget()
+        self.glw.setBackground(GROUND)
         layout.addWidget(self.glw)
 
-        # row 0/1: camera titles + panels
-        self.images: dict[str, pg.ImageItem] = {}
-        self.cam_labels: dict[str, pg.LabelItem] = {}
+        # rows 0-1: the camera strip — the views side by side as ONE image in
+        # one black-framed box (no gaps), view name + frame age overlaid.
         views = list(cameras) or []
-        for col, view in enumerate(views):
-            self.cam_labels[view] = self.glw.addLabel(view, row=0, col=col)
-            vb = self.glw.addViewBox(row=1, col=col, lockAspect=True, enableMenu=False)
+        self.views = views
+        self.cam_labels: dict[str, pg.TextItem] = {}
+        self.strip: pg.ImageItem | None = None
+        if views:
+            vb = self.glw.addViewBox(row=0, col=0, colspan=len(views), lockAspect=True, enableMenu=False)
             vb.invertY(True)
             vb.setMouseEnabled(False, False)
-            img = pg.ImageItem(axisOrder="row-major")
-            vb.addItem(img)
-            self.images[view] = img
+            vb.setDefaultPadding(0.01)
+            self.strip = pg.ImageItem(axisOrder="row-major")
+            self.strip.setBorder(pg.mkPen((0, 0, 0), width=STRIP_FRAME_PX))
+            vb.addItem(self.strip)
+            for view in views:
+                label = pg.TextItem(view, color=(235, 235, 235), fill=(0, 0, 0, 140), anchor=(0, 0))
+                label.setZValue(10)
+                vb.addItem(label)
+                self.cam_labels[view] = label
+            self._strip_vb = vb
         ncols = max(1, len(views))
-        plot_row = 2 if views else 0
+        plot_row = 1 if views else 0
 
         # the plot (row 2 under the cameras, row 0 without them)
         self.plot = self.glw.addPlot(row=plot_row, col=0, colspan=ncols)
@@ -285,8 +307,8 @@ class ProgressViewer(QtWidgets.QWidget):
             "waiting for samples…", row=plot_row + 1, col=0, colspan=ncols, justify="left"
         )
         if views:
-            self.glw.ci.layout.setRowStretchFactor(1, 3)
-            self.glw.ci.layout.setRowStretchFactor(2, 4)
+            self.glw.ci.layout.setRowStretchFactor(0, 3)
+            self.glw.ci.layout.setRowStretchFactor(1, 4)
 
         self.tail_timer = QtCore.QTimer(self)
         self.tail_timer.timeout.connect(self.on_tail)
@@ -428,13 +450,40 @@ class ProgressViewer(QtWidgets.QWidget):
         )
 
     def on_cameras(self) -> None:
+        """Compose the latest frames into one strip: [view0 | sep | view1 | ...]."""
+        tiles, texts = [], []
+        height = None
         for view, sub in self.cameras.items():
             frame, age = sub.latest()
             if frame is None:
-                self.cam_labels[view].setText(f"{view} — no frames")
+                tiles.append(None)
+                texts.append(f"{view} — no frames")
                 continue
-            self.images[view].setImage(frame.rgb, autoLevels=False, levels=(0, 255))
-            self.cam_labels[view].setText(f"{view}  {age * 1e3:.0f} ms")
+            rgb = frame.rgb
+            height = rgb.shape[0] if height is None else min(height, rgb.shape[0])
+            tiles.append(rgb)
+            texts.append(f"{view}  {age * 1e3:.0f} ms")
+        if height is None:
+            return  # nothing decoded yet
+        width0 = next(t.shape[1] for t in tiles if t is not None)
+        parts, x_starts, x = [], [], 0
+        for i, tile in enumerate(tiles):
+            if tile is None:
+                tile = np.zeros((height, width0, 3), np.uint8)
+            elif tile.shape[0] != height:
+                tile = _fit_height(tile, height)
+            if i > 0:
+                parts.append(np.zeros((height, STRIP_SEP_PX, 3), np.uint8))
+                x += STRIP_SEP_PX
+            x_starts.append(x)
+            parts.append(tile)
+            x += tile.shape[1]
+        strip = np.concatenate(parts, axis=1)
+        self.strip.setImage(strip, autoLevels=False, levels=(0, 255))
+        for view, text, x0 in zip(self.views, texts, x_starts):
+            label = self.cam_labels[view]
+            label.setText(text)
+            label.setPos(x0 + 6, 4)
 
     # ── keys ──────────────────────────────────────────────────────────────
 
