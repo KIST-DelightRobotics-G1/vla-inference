@@ -22,8 +22,14 @@
 # No HF mount: the Cosmos-Reason2-2B backbone is baked into the image and the
 # image runs with HF_HUB_OFFLINE=1 — no network or HF account at runtime.
 #
-# Iterative dev: add  -v "$(pwd)":/workspace/kist-vla-inference  to shadow the
-# baked source with your working copy (editable install picks it up).
+#   <repo>/{src,tests,scripts,config} -> same paths in the container
+#                               the working copy shadows the baked source, so a
+#                               `git pull` on the host is live in the container
+#                               (editable install points at src/). Only these
+#                               four: mounting the whole repo would hide the
+#                               image's models/ (SONIC encoder ONNX).
+#                               PYTHONDONTWRITEBYTECODE keeps root-owned
+#                               __pycache__ out of the host tree.
 set -euo pipefail
 
 CONTAINER=kist-vla-inference
@@ -62,5 +68,10 @@ exec docker run -it --name "${CONTAINER}" \
     -e QT_X11_NO_MITSHM=1 \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v "${REPO_ROOT}/shared":/workspace/kist-vla-inference/shared \
+    -v "${REPO_ROOT}/src":/workspace/kist-vla-inference/src \
+    -v "${REPO_ROOT}/tests":/workspace/kist-vla-inference/tests \
+    -v "${REPO_ROOT}/scripts":/workspace/kist-vla-inference/scripts \
+    -v "${REPO_ROOT}/config":/workspace/kist-vla-inference/config \
+    -e PYTHONDONTWRITEBYTECODE=1 \
     -v "${CHECKPOINT_DIR}":"/workspace/checkpoints/$(basename "${CHECKPOINT_DIR}")":ro \
     kist-vla-inference /bin/bash
