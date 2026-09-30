@@ -240,6 +240,22 @@ def main(config: Config) -> None:
                 # The hook fired inside predict(); this is that observation's
                 # score. One dot product on GPU + .item() sync — negligible.
                 raw = probe.read()
+                t_probe = time.monotonic()
+                # Perception -> probe latency budget, per prediction:
+                #   frame_age_ms  oldest camera frame's age at observation build
+                #   probe_lag_ms  that frame's DDS arrival -> probe score
+                #                 (= frame_age + build/predict/read, our clock)
+                #   sensor_lag_ms sensor capture stamp -> probe score
+                #                 (ext-sensor-io's clock; needs synced clocks)
+                timing = None
+                if observation.camera_age_s:
+                    frame_age_s = max(observation.camera_age_s.values())
+                    oldest_stamp_ns = min(observation.camera_stamp_ns.values())
+                    timing = {
+                        "frame_age_ms": frame_age_s * 1e3,
+                        "probe_lag_ms": (frame_age_s + (t_probe - t0)) * 1e3,
+                        "sensor_lag_ms": time.time() * 1e3 - oldest_stamp_ns / 1e6,
+                    }
                 if raw is not None and monitor is not None:
                     # Detect new subtask so the running max doesn't carry over.
                     current_subtask_id = machine.subtask_id()
@@ -258,7 +274,7 @@ def main(config: Config) -> None:
                     progress = reading.progress
                 else:
                     progress = raw
-                progress_log.append(progress, elapsed * 1e3, reading=reading)
+                progress_log.append(progress, elapsed * 1e3, reading=reading, timing=timing)
 
             latency_sum += elapsed
             predictions += 1

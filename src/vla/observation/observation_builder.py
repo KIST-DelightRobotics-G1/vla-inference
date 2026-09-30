@@ -68,12 +68,16 @@ class ObservationBuilder:
     def build(self, prompt: str) -> Observation | None:
         """One Observation from the freshest snapshots, or None."""
         video: dict = {}
+        camera_age_s: dict[str, float] = {}
+        camera_stamp_ns: dict[str, int] = {}
         for view, camera in self._cameras.items():
             frame, age = camera.latest()
             if frame is None or age > self._camera_max_age_s:
                 self._report(f"camera '{view}' {'missing' if frame is None else f'stale ({age:.2f}s)'}")
                 return None
             video[view] = frame.rgb
+            camera_age_s[view] = age
+            camera_stamp_ns[view] = frame.stamp_ns
 
         state, age = self._state_reader.latest_state()
         if state is None or age > self._state_max_age_s:
@@ -97,7 +101,10 @@ class ObservationBuilder:
         }
         groups["projected_gravity"] = compute_projected_gravity(state.imu_pelvis.quaternion)
 
-        return Observation(video=video, state=groups, prompt=prompt)
+        return Observation(
+            video=video, state=groups, prompt=prompt,
+            camera_age_s=camera_age_s, camera_stamp_ns=camera_stamp_ns,
+        )
 
     def _report(self, reason: str) -> None:
         import time

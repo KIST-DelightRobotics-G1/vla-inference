@@ -55,6 +55,10 @@ class ProgressLog:
     Minimal schema (probe alone, no monitor): {"t", "progress", "latency_ms"}.
     Extended schema (probe + monitor): + raw, slope_per_s, stalled, plateaued,
     done, state — one row is enough to redraw a full progress timeline offline.
+    Timing (probe runs): + frame_age_ms (oldest camera frame's age when the
+    observation was built), probe_lag_ms (that frame's DDS arrival -> probe
+    score: the perception-to-probe latency), sensor_lag_ms (sensor capture
+    stamp -> probe score; meaningful only with synced clocks).
 
     Args:
         directory: where the file goes (created if missing).
@@ -76,12 +80,17 @@ class ProgressLog:
         latency_ms: float,
         *,
         reading: Reading | None = None,
+        timing: dict | None = None,
     ) -> None:
+        """`timing`: extra *_ms fields for the perception->probe latency budget
+        (frame_age_ms, probe_lag_ms, sensor_lag_ms — see runner.py)."""
         entry: dict = {
             "t": round(time.time(), 3),
             "progress": None if progress is None else round(progress, 4),
             "latency_ms": round(latency_ms, 1),
         }
+        if timing:
+            entry.update({k: (None if v is None else round(v, 1)) for k, v in timing.items()})
         if reading is not None:
             entry["raw"] = round(reading.raw, 4)
             entry["slope_per_s"] = (

@@ -445,10 +445,12 @@ class ProgressViewer(QtWidgets.QWidget):
         flags = " ".join(n for n, v in (("stalled", r.stalled), ("plateaued", r.plateaued)) if v)
         marks = len([m for m in (self.marks.rows if self.marks else []) if m["kind"] != "reset"])
         follow = "" if self.follow else "   <b>[PAUSED]</b>"
+        lag = self.last_row.get("probe_lag_ms")
+        lag_part = "" if lag is None else f"   probe lag <b>{lag:.0f} ms</b> (infer {self.last_row.get('latency_ms', 0):.0f})"
         self.status.setText(
             f"raw <b>{r.raw:.3f}</b>   progress <b>{r.progress:.3f}</b>   slope {slope}   "
             f"state <b>{r.state.value}</b> {flags}   ep#<b>{self.episode}</b>   marks {marks}   "
-            f"{age}{follow}   <span style='color:#888'>keys: s f u r space q</span>"
+            f"{age}{lag_part}{follow}   <span style='color:#888'>keys: s f u r space q</span>"
         )
 
     def on_cameras(self) -> None:
