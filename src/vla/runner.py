@@ -23,6 +23,7 @@ ext-sensor-io camera names — a 1-view checkpoint runs one subscriber, the
 3-view one runs three.
 """
 
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -102,6 +103,11 @@ class Config:
     probe_dir: str = "shared/probe"
     """Where the per-rollout progress JSONL goes (host-mounted via shared/)."""
 
+    task: str | None = None
+    """Short task name for the progress log file name
+    (<task>_<checkpoint>_<probe>_<NN>_<time>.jsonl). Default: the first words
+    of --prompt, or "cortex" with --cortex (live instructions)."""
+
 
 def main(config: Config) -> None:
     dds_cfg = load_dds_config(config.config)
@@ -128,11 +134,19 @@ def main(config: Config) -> None:
     progress_log = None
     if config.probe is not None:
         from .progress_probe import ProgressLog, ProgressProbe
+        from .progress_probe.progress_log import run_stem
 
         probe = ProgressProbe(config.probe)
         probe.check_prompt(config.prompt)
         probe.attach(policy.torch_model)
-        progress_log = ProgressLog(config.probe_dir)
+        task = config.task or ("cortex" if config.cortex else config.prompt)
+        stem = run_stem(
+            config.probe_dir,
+            task,
+            os.path.basename(os.path.normpath(config.checkpoint)),
+            os.path.splitext(os.path.basename(config.probe))[0],
+        )
+        progress_log = ProgressLog(config.probe_dir, stem)
 
     # One participant for every Rx source (ChannelFactory convention); the
     # streamer's writer owns its Tx side separately.
