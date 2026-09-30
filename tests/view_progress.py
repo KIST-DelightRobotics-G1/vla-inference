@@ -74,12 +74,13 @@ class Config:
 
     cameras: dict[str, str] = field(
         default_factory=lambda: {
-            "ego_view": "head",
             "left_wrist": "left_wrist",
+            "ego_view": "head",
             "right_wrist": "right_wrist",
         }
     )
-    """View name -> ext-sensor-io camera name (same mapping as run_vla.py)."""
+    """View name -> ext-sensor-io camera name (same mapping as run_vla.py).
+    Dict order = panel order, left to right: wrists flank the head view."""
 
     no_cameras: bool = False
     """Plot only — no DDS at all."""
