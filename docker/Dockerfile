@@ -161,6 +161,21 @@ COPY --from=hf-cache models--nvidia--Cosmos-Reason2-2B \
      /root/.cache/huggingface/hub/models--nvidia--Cosmos-Reason2-2B
 ENV HF_HUB_OFFLINE=1
 
+# ─── viewer: pyqtgraph (PyQt5) + the runtime libs libqxcb.so links ───────────
+# The 12 apt packages are the minimum found by adding them one at a time in an
+# empty noble container (PyQt5 5.15.11 / pyqtgraph 0.14.0); without
+# libglib2.0-0 even `import PyQt5.QtCore` fails. The window is drawn on the
+# HOST's X server — run.sh passes DISPLAY and the /tmp/.X11-unix socket.
+# Placed after the backbone COPY and before the source COPY so a rebuild
+# reuses every layer above and only re-runs what a code edit re-runs anyway.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 libgl1 libdbus-1-3 libfontconfig1 \
+    libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
+    libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install PyQt5==5.15.11 pyqtgraph==0.14.0
+
 COPY . .
 RUN uv pip install --no-deps -e . && \
     python -c "import replay.cli; \

@@ -5,6 +5,11 @@
 #
 #   --network host    CycloneDDS discovery/multicast toward gearsonic
 #   --gpus all        GR00T inference (harmless no-op for replay work)
+#   -e DISPLAY + /tmp/.X11-unix   the pyqtgraph viewer draws on the HOST's X
+#                     server (container has none). DISPLAY falls back to :0
+#                     for SSH sessions; `xhost +local:docker` grants access.
+#                     QT_X11_NO_MITSHM=1 avoids BadAccess from shared-memory
+#                     X images across the container boundary.
 #
 # Mounts:
 #   <repo>/shared            -> /workspace/kist-vla-inference/shared
@@ -47,9 +52,15 @@ elif [ "$(docker ps -aq -f name=^${CONTAINER}$)" ]; then
 fi
 
 mkdir -p "${REPO_ROOT}/shared"
+# Let the container's X client reach the host X server (no-op without an X
+# session, e.g. plain SSH — the viewer then needs DISPLAY pointed elsewhere).
+xhost +local:docker >/dev/null 2>&1 || true
 exec docker run -it --name "${CONTAINER}" \
     --network host \
     --gpus all \
+    -e DISPLAY="${DISPLAY:-:0}" \
+    -e QT_X11_NO_MITSHM=1 \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v "${REPO_ROOT}/shared":/workspace/kist-vla-inference/shared \
     -v "${CHECKPOINT_DIR}":"/workspace/checkpoints/$(basename "${CHECKPOINT_DIR}")":ro \
     kist-vla-inference /bin/bash
