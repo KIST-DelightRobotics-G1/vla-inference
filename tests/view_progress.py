@@ -304,13 +304,33 @@ class ProgressViewer(QtWidgets.QWidget):
         self.plot.addItem(self.scatter)
         self._event_lines: list[pg.InfiniteLine] = []
 
-        # status line under the plot
-        self.status = self.glw.addLabel(
-            "waiting for samples…", row=plot_row + 1, col=0, colspan=ncols, justify="left"
-        )
         if views:
             self.glw.ci.layout.setRowStretchFactor(0, 3)
             self.glw.ci.layout.setRowStretchFactor(1, 4)
+
+        # status bar under the plot, two rows so nothing gets squeezed:
+        #   row 0: [state: verdict · episode · marks · live/replay]      [keys, right]
+        #   row 1: [numbers: raw · progress · slope · probe lag]
+        bar = QtWidgets.QGridLayout()
+        bar.setContentsMargins(8, 2, 8, 4)
+        bar.setHorizontalSpacing(24)
+        bar.setVerticalSpacing(2)
+        self.status_state = QtWidgets.QLabel("waiting for samples…")
+        self.status_numbers = QtWidgets.QLabel("")
+        self.status_keys = QtWidgets.QLabel(
+            "<span style='color:#7d8590'>s success &nbsp; f fail &nbsp; u undo &nbsp; "
+            "r episode &nbsp; space pause &nbsp; q quit</span>"
+        )
+        for lab in (self.status_state, self.status_numbers, self.status_keys):
+            lab.setStyleSheet(f"color: #d8dde6; background: rgb{GROUND}; font-size: 13px;")
+            lab.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.status_keys.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        bar.addWidget(self.status_state, 0, 0)
+        bar.addWidget(self.status_keys, 0, 1)
+        bar.addWidget(self.status_numbers, 1, 0, 1, 2)
+        bar.setColumnStretch(0, 1)
+        layout.addLayout(bar)
+        self.setStyleSheet(f"background: rgb{GROUND};")
 
         self.tail_timer = QtCore.QTimer(self)
         self.tail_timer.timeout.connect(self.on_tail)
@@ -437,20 +457,40 @@ class ProgressViewer(QtWidgets.QWidget):
         if self.last_reading is None:
             return
         r = self.last_reading
+        row = self.last_row
+        # ── state group: what is happening ──────────────────────────────
+        verdict = {"running": "RUNNING", "done": "DONE", "stalled": "STALLED"}[r.state.value]
+        color = {"RUNNING": "#d8dde6", "DONE": "#3cc85a", "STALLED": "#f04646"}[verdict]
+        flags = " · ".join(n for n, v in (("plateaued", r.plateaued), ("stalled", r.stalled)) if v)
+        if r.slope_per_s is None:
+            flags = "warmup"
+        rows = self.marks.rows if self.marks else []
+        n_s = sum(1 for m in rows if m["kind"] == "success")
+        n_f = sum(1 for m in rows if m["kind"] == "fail")
         if self.replay:
-            age = f"replay {self._x(self.last_row['t']):.1f} s"
+            source = f"replay t={self._x(row['t']):.1f} s"
         else:
-            age = f"sample age {(time.time() - self.last_row['t']) * 1e3:.0f} ms"
-        slope = "warmup" if r.slope_per_s is None else f"{r.slope_per_s:+.3f}/s"
-        flags = " ".join(n for n, v in (("stalled", r.stalled), ("plateaued", r.plateaued)) if v)
-        marks = len([m for m in (self.marks.rows if self.marks else []) if m["kind"] != "reset"])
-        follow = "" if self.follow else "   <b>[PAUSED]</b>"
-        lag = self.last_row.get("probe_lag_ms")
-        lag_part = "" if lag is None else f"   probe lag <b>{lag:.0f} ms</b> (infer {self.last_row.get('latency_ms', 0):.0f})"
-        self.status.setText(
-            f"raw <b>{r.raw:.3f}</b>   progress <b>{r.progress:.3f}</b>   slope {slope}   "
-            f"state <b>{r.state.value}</b> {flags}   ep#<b>{self.episode}</b>   marks {marks}   "
-            f"{age}{lag_part}{follow}   <span style='color:#888'>keys: s f u r space q</span>"
+            source = f"live · sample age {(time.time() - row['t']) * 1e3:.0f} ms"
+        paused = "   <b style='color:#ffc83c'>PAUSED</b>" if not self.follow else ""
+        self.status_state.setText(
+            f"<b style='color:{color}'>{verdict}</b>"
+            + (f" <span style='color:#9aa3b2'>{flags}</span>" if flags else "")
+            + f" &nbsp;·&nbsp; episode <b>{self.episode}</b>"
+            + f" &nbsp;·&nbsp; marks <b>{n_s}</b> success / <b>{n_f}</b> fail"
+            + f" &nbsp;·&nbsp; {source}{paused}"
+        )
+        # ── numbers group ───────────────────────────────────────────────
+        slope = "—" if r.slope_per_s is None else f"{r.slope_per_s:+.3f}/s"
+        parts = [
+            f"raw <b>{r.raw:.3f}</b>",
+            f"progress <b>{r.progress:.3f}</b>",
+            f"slope(5 s) <b>{slope}</b>",
+        ]
+        lag = row.get("probe_lag_ms")
+        if lag is not None:
+            parts.append(f"probe lag <b>{lag:.0f} ms</b> (inference {row.get('latency_ms', 0):.0f} ms)")
+        self.status_numbers.setText(
+            "<span style='color:#9aa3b2'>" + " &nbsp;·&nbsp; ".join(parts) + "</span>"
         )
 
     def on_cameras(self) -> None:
