@@ -489,6 +489,8 @@ class ProgressViewer(QtWidgets.QWidget):
         lag = row.get("probe_lag_ms")
         if lag is not None:
             parts.append(f"probe lag <b>{lag:.0f} ms</b> (inference {row.get('latency_ms', 0):.0f} ms)")
+        if "probe" in row:
+            parts.append(f"probe <b>{row['probe'] or 'none'}</b>")
         self.status_numbers.setText(
             "<span style='color:#9aa3b2'>" + " &nbsp;·&nbsp; ".join(parts) + "</span>"
         )

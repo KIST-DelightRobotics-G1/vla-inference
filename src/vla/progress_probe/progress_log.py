@@ -55,7 +55,8 @@ class ProgressLog:
     Minimal schema (probe alone, no monitor): {"t", "progress", "latency_ms"}.
     Extended schema (probe + monitor): + raw, slope_per_s, stalled, plateaued,
     done, state — one row is enough to redraw a full progress timeline offline.
-    Timing (probe runs): + frame_age_ms (oldest camera frame's age when the
+    Timing (probe runs): + probe (active head name, None = no match),
+    frame_age_ms (oldest camera frame's age when the
     observation was built), probe_lag_ms (that frame's DDS arrival -> probe
     score: the perception-to-probe latency), sensor_lag_ms (sensor capture
     stamp -> probe score; meaningful only with synced clocks).
@@ -90,7 +91,9 @@ class ProgressLog:
             "latency_ms": round(latency_ms, 1),
         }
         if timing:
-            entry.update({k: (None if v is None else round(v, 1)) for k, v in timing.items()})
+            entry.update({
+                k: (round(v, 1) if isinstance(v, float) else v) for k, v in timing.items()
+            })
         if reading is not None:
             entry["raw"] = round(reading.raw, 4)
             entry["slope_per_s"] = (

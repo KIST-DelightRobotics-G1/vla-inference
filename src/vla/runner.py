@@ -96,9 +96,11 @@ class Config:
     """Seconds between status lines (inference latency, cursor health)."""
 
     probe: str | None = None
-    """Progress-probe .pt path (e.g. /data/vla/progress_probe/probe_succ3v.pt).
-    Only valid with the checkpoint it was fitted on — the probe prints its
-    extractor on load. None disables the probe entirely."""
+    """Progress probe: one .pt, or a JSON index {"<fit prompt>": "<.pt>", ...}
+    (shared/probe/probes.json). With the index the .pt whose prompt equals the
+    live instruction is selected per subtask (--cortex) and loaded on first
+    use; a cmd may force one with args=["probe=<name>"]. Only valid with the
+    checkpoint the probes were fitted on. None disables the probe."""
 
     probe_dir: str = "shared/probe"
     """Where the per-rollout progress JSONL goes (host-mounted via shared/)."""
@@ -137,14 +139,18 @@ def main(config: Config) -> None:
         from .progress_probe.progress_log import run_stem
 
         probe = ProgressProbe(config.probe)
-        probe.check_prompt(config.prompt)
         probe.attach(policy.torch_model)
+        if not config.cortex:
+            # Fixed prompt: pick its head once (a single .pt stays active and
+            # only warns on mismatch; a bank may yield none -> no score).
+            probe.select(config.prompt)
         task = config.task or ("cortex" if config.cortex else config.prompt)
+        probe_label = os.path.splitext(os.path.basename(config.probe))[0]  # "probes" for the index
         stem = run_stem(
             config.probe_dir,
             task,
             os.path.basename(os.path.normpath(config.checkpoint)),
-            os.path.splitext(os.path.basename(config.probe))[0],
+            probe_label,
         )
         progress_log = ProgressLog(config.probe_dir, stem)
 
@@ -237,8 +243,19 @@ def main(config: Config) -> None:
             progress = None
             reading = None
             if probe is not None:
+                # New subtask? (cortex) Select the head fitted on its prompt —
+                # or the cmd's probe= override — and reset the running max,
+                # BEFORE reading this prediction's score.
+                if machine is not None:
+                    current_subtask_id = machine.subtask_id()
+                    if current_subtask_id != last_subtask_id:
+                        probe.select(prompt, override=machine.probe_override())
+                        if monitor is not None:
+                            monitor.reset()
+                        last_subtask_id = current_subtask_id
                 # The hook fired inside predict(); this is that observation's
                 # score. One dot product on GPU + .item() sync — negligible.
+                # None = no head for this prompt: no score, no verdict.
                 raw = probe.read()
                 t_probe = time.monotonic()
                 # Perception -> probe latency budget, per prediction:
@@ -247,21 +264,16 @@ def main(config: Config) -> None:
                 #                 (= frame_age + build/predict/read, our clock)
                 #   sensor_lag_ms sensor capture stamp -> probe score
                 #                 (ext-sensor-io's clock; needs synced clocks)
-                timing = None
+                timing = {"probe": probe.active_name}
                 if observation.camera_age_s:
                     frame_age_s = max(observation.camera_age_s.values())
                     oldest_stamp_ns = min(observation.camera_stamp_ns.values())
-                    timing = {
+                    timing.update({
                         "frame_age_ms": frame_age_s * 1e3,
                         "probe_lag_ms": (frame_age_s + (t_probe - t0)) * 1e3,
                         "sensor_lag_ms": time.time() * 1e3 - oldest_stamp_ns / 1e6,
-                    }
+                    })
                 if raw is not None and monitor is not None:
-                    # Detect new subtask so the running max doesn't carry over.
-                    current_subtask_id = machine.subtask_id()
-                    if current_subtask_id != last_subtask_id:
-                        monitor.reset()
-                        last_subtask_id = current_subtask_id
                     now = time.monotonic()
                     reading = monitor.update(raw, now)
                     # Feed the verdict to the machine — DONE/STALLED transition.
@@ -281,7 +293,8 @@ def main(config: Config) -> None:
             if t0 - last_report >= config.report_s:
                 stats = cursor.stats()
                 progress_part = (
-                    "" if probe is None else f"progress {progress:.2f} | "
+                    "" if probe is None
+                    else f"progress {'-' if progress is None else f'{progress:.2f}'} | "
                 )
                 print(
                     f"inference {latency_sum / predictions * 1e3:.0f}ms avg "

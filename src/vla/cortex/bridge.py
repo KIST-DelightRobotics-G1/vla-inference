@@ -121,6 +121,7 @@ class CortexBridge:
                 instruction=cmd.instruction,
                 cancel=bool(cmd.cancel),
                 now=now,
+                args=tuple(cmd.args),
             )
             self._apply(effect)
             kind = "cancel" if cmd.cancel else cmd.action

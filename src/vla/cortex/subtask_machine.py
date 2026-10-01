@@ -37,7 +37,7 @@ from enum import Enum
 
 from common.cyclonedds.cortex_msgs import SubtaskStatus
 
-from ..progress_probe import ProgressState
+from ..progress_probe import ProgressState, override_from_args
 
 # Actions this module cannot perform — the ICD routes move_to to nav.
 UNSUPPORTED_ACTIONS = frozenset({"move_to"})
@@ -80,6 +80,7 @@ class SubtaskMachine:
         self._index = 0
         self._action = ""
         self._instruction = ""
+        self._args: tuple[str, ...] = ()
         self._detail = ""
         self._progress = 0.0            # last probe verdict's progress, published
         self._deadline: float | None = None
@@ -96,11 +97,12 @@ class SubtaskMachine:
         instruction: str,
         cancel: bool,
         now: float,
+        args: tuple[str, ...] = (),
     ) -> Effect:
         with self._lock:
             if cancel:
                 return self._on_cancel(plan_id, index)
-            return self._on_task(plan_id, index, action, instruction, now)
+            return self._on_task(plan_id, index, action, instruction, now, args)
 
     def on_progress(
         self, state: ProgressState, progress: float, now: float
@@ -162,7 +164,8 @@ class SubtaskMachine:
         return Effect.FREEZE
 
     def _on_task(
-        self, plan_id: str, index: int, action: str, instruction: str, now: float
+        self, plan_id: str, index: int, action: str, instruction: str, now: float,
+        args: tuple[str, ...] = (),
     ) -> Effect:
         was_running = self._status is SubtaskStatus.RUNNING
         # A new valid cmd preempts even a DONE/FAILED countdown in progress.
@@ -182,6 +185,7 @@ class SubtaskMachine:
 
         self._status = SubtaskStatus.RUNNING
         self._instruction = instruction
+        self._args = tuple(args)
         self._detail = ""
         self._progress = 0.0
         self._deadline = now + self._timeout_s if self._timeout_s > 0 else None
@@ -197,6 +201,7 @@ class SubtaskMachine:
         self._index = 0
         self._action = ""
         self._instruction = ""
+        self._args = ()
         self._detail = detail
         self._progress = 0.0
         self._deadline = None
@@ -210,6 +215,13 @@ class SubtaskMachine:
             if self._status is SubtaskStatus.RUNNING:
                 return self._instruction
             return None
+
+    def probe_override(self) -> str | None:
+        """'probe=<name>' from the RUNNING cmd's args, else None (probe_bank)."""
+        with self._lock:
+            if self._status is not SubtaskStatus.RUNNING:
+                return None
+            return override_from_args(self._args)
 
     def subtask_id(self) -> tuple[str, int]:
         """(plan_id, index) of the RUNNING subtask, ('', 0) otherwise.
