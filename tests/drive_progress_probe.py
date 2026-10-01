@@ -38,13 +38,13 @@ Try (offline):
 
     cmd Open the fridge.          -> RUNNING
     0.1 x4   0.3 x4   0.5 x4      -> RUNNING, slope healthy
-    0.62 x12                      -> plateau in the grey zone -> DONE x3 -> IDLE
+    0.62 x12                      -> grey-zone plateau: stays RUNNING (no verdict)
     cmd Grab the cup.  0.4 x14    -> stuck under 0.55 -> FAILED x3 -> IDLE
     cmd Close it.      0.2  0.75  -> >= 0.70: DONE at once, slope irrelevant
 
 Thresholds are CLI flags so the contract table in the design doc (3.1.1)
-can be tried live: --stuck-value-threshold 0.70 sends grey-zone plateaus
-to FAILED instead.
+can be tried live: --stuck-value-threshold 0.70 turns a grey-zone plateau
+into STALLED -> FAILED instead of RUNNING.
 """
 
 import shlex

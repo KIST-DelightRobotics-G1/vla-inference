@@ -1,9 +1,12 @@
 """ProgressMonitor: probe raw score stream -> subtask verdict.
 
 Stateless observation (raw) in, time-axis statistics out. Running max
-(progress is monotonic by fit), 5s sliding slope, and the stalled /
-plateaued / done flags drive one ProgressState verdict that
-SubtaskMachine.on_progress consumes.
+(progress is monotonic by fit), 5s sliding slope, and the stalled / done
+flags drive one ProgressState verdict that SubtaskMachine.on_progress
+consumes. DONE is the absolute threshold only; a high plateau is NOT done
+(the `plateaued` flag is logged for the record but carries no verdict —
+a stuck-but-high episode stays RUNNING until the step timeout or the
+orchestrator decides).
 
 reset() must be called on every new subtask — running max carried over
 from the previous subtask would make the new one look near-done from
@@ -19,7 +22,7 @@ class ProgressState(str, Enum):
     """Verdict fed to SubtaskMachine.on_progress(state, progress, now)."""
 
     RUNNING = "running"    # still in progress
-    DONE = "done"          # complete: progress >= done_threshold or plateaued high
+    DONE = "done"          # complete: progress >= done_threshold (absolute only)
     STALLED = "stalled"    # failed: stuck at low progress
 
 
@@ -30,9 +33,9 @@ class Reading:
     raw: float                    # probe's raw score, unclipped
     progress: float               # running max, clipped to [0, 1]
     slope_per_s: float | None     # 5s slope, None until the window fills
-    stalled: bool
-    plateaued: bool
-    done: bool
+    stalled: bool                 # stuck below stuck_value_threshold -> STALLED
+    plateaued: bool               # stuck at/above it — informational, no verdict
+    done: bool                    # progress >= done_threshold
     state: ProgressState
 
 
@@ -80,15 +83,17 @@ class ProgressMonitor:
             if span >= self._window_s * 0.95:
                 slope = (progress - p0) / span
 
-        # 4) stuck branch: slope low AND which side of stuck_value_threshold
+        # 4) stuck branch: slope low AND which side of stuck_value_threshold.
+        #    Only the low side is a verdict (STALLED); `plateaued` is kept as
+        #    a diagnostic flag — a high plateau is not evidence of completion.
         stuck = slope is not None and slope < self._slope_th
         stalled = stuck and progress < self._stuck_val_th
         plateaued = stuck and progress >= self._stuck_val_th
 
-        # 5) done: absolute value OR plateaued (high but stopped moving)
-        done = progress >= self._done_th or plateaued
+        # 5) done: the absolute threshold, nothing else
+        done = progress >= self._done_th
 
-        # 6) verdict — stalled beats done (they can't both be true anyway)
+        # 6) verdict — stalled and done are disjoint (stuck_val_th <= done_th)
         if stalled:
             state = ProgressState.STALLED
         elif done:
