@@ -6,25 +6,31 @@ probe verdicts via on_progress(), and it answers with the cursor effect
 each transition requires and renders the 10 Hz SubtaskState fields on
 demand.
 
-The v0.2 state machine (DONE landed via the progress probe):
+The v0.3 state machine (a RUNNING subtask is never replaced, only ended):
 
     IDLE ──valid cmd──▶ RUNNING ──cancel (matching id)──▶ IDLE   "cancelled"
-                          │  │──new valid cmd─────────────▶ RUNNING (preempt)
                           │  │──probe: DONE───────────────▶ DONE ×3 → IDLE
                           │  │──probe: STALLED────────────▶ FAILED ×3 → IDLE
-                          │  │──step timeout──────────────▶ FAILED ×3 → IDLE
-                          │  └──unsupported cmd───────────▶ FAILED ×3 → IDLE
-    FAILED (during ×3) ──any valid cmd──▶ RUNNING  (preempts the countdown)
+                          │  └──step timeout──────────────▶ FAILED ×3 → IDLE
+                          │
+                          └── any other cmd while RUNNING: IGNORED (no change)
+    IDLE ──unsupported cmd──▶ FAILED ×3 → IDLE      "unsupported: <why>"
+    DONE/FAILED (during ×3) ──valid cmd──▶ RUNNING  (the task is over; the
+                                                     countdown is cut short)
+
+A new prompt therefore always goes cancel → IDLE → cmd: the robot stops
+(FREEZE) between subtasks and nothing is ever preempted mid-motion. A cmd
+that arrives while RUNNING is dropped on the floor — the orchestrator sees
+its (plan_id, index) never appear in SubtaskState; the bridge logs it.
 
 DONE and FAILED are published for _FINAL_REPEATS bridge ticks (~300 ms) as
-QoS edge-loss insurance, then auto-reset to IDLE per the ICD. A new valid
-cmd during that window preempts the countdown immediately.
+QoS edge-loss insurance, then auto-reset to IDLE per the ICD.
 
 Appendix-A detail values: "" (nominal), "cancelled", "unsupported: <why>",
 "timeout <s>s", "done (progress N.NN)", "stalled at N.NN". Deferred variants
 (cancel_deferred / preempt_deferred / cancelled_at_safe_point) never occur:
-chunk swap lands within ~0.5 s so cancel and preempt are always immediate.
-"estop" is gearsonic's safety layer, not ours.
+cancel is immediate and preemption does not exist. "estop" is gearsonic's
+safety layer, not ours.
 
 Every transition that stops acting (cancel, unsupported, timeout, DONE,
 STALLED) returns Effect.FREEZE — the bridge pins the cursor so the robot
@@ -104,6 +110,11 @@ class SubtaskMachine:
                 return self._on_cancel(plan_id, index)
             return self._on_task(plan_id, index, action, instruction, now, args)
 
+    def accepts_cmd(self) -> bool:
+        """False while RUNNING: a non-cancel cmd arriving now is ignored."""
+        with self._lock:
+            return self._status is not SubtaskStatus.RUNNING
+
     def on_progress(
         self, state: ProgressState, progress: float, now: float
     ) -> Effect:
@@ -167,8 +178,13 @@ class SubtaskMachine:
         self, plan_id: str, index: int, action: str, instruction: str, now: float,
         args: tuple[str, ...] = (),
     ) -> Effect:
-        was_running = self._status is SubtaskStatus.RUNNING
-        # A new valid cmd preempts even a DONE/FAILED countdown in progress.
+        if self._status is SubtaskStatus.RUNNING:
+            # Only IDLE (or a finished DONE/FAILED) takes a new subtask. The
+            # running one ends through cancel, a probe verdict or the step
+            # timeout — never by replacement. Nothing changes here.
+            return Effect.NONE
+
+        # A DONE/FAILED countdown in progress is cut short: that task is over.
         self._final_left = 0
         # The reported identity is the received one either way — FAILED must
         # name the cmd it rejects.
@@ -180,8 +196,7 @@ class SubtaskMachine:
             self._detail = f"unsupported: {why}"
             self._deadline = None
             self._final_left = _FINAL_REPEATS
-            # A running task was preempted by a broken cmd: stop acting.
-            return Effect.FREEZE if was_running else Effect.NONE
+            return Effect.NONE  # nothing was running, nothing to freeze
 
         self._status = SubtaskStatus.RUNNING
         self._instruction = instruction
@@ -189,8 +204,8 @@ class SubtaskMachine:
         self._detail = ""
         self._progress = 0.0
         self._deadline = now + self._timeout_s if self._timeout_s > 0 else None
-        # Preempt needs no cursor effect: the inference loop picks up the new
-        # instruction on its next build and the fresh chunk splices in.
+        # Starting needs no cursor effect: the inference loop picks up the
+        # instruction on its next build and the first chunk unpins the cursor.
         return Effect.NONE
 
     def _reset_to_idle(self, *, detail: str = "") -> None:

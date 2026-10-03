@@ -78,8 +78,9 @@ def test_stale_cancel_ignored():
     assert m.state_fields().status is SubtaskStatus.RUNNING
 
 
-def test_preempt_replaces_instruction_without_effect():
+def test_cmd_while_running_is_ignored():
     m = running_machine()
+    assert not m.accepts_cmd()
     effect = m.on_cmd(
         plan_id="p-1-0001",
         index=1,
@@ -89,6 +90,18 @@ def test_preempt_replaces_instruction_without_effect():
         now=102.0,
     )
     assert effect is Effect.NONE
+    # nothing replaced: same instruction, same identity, still RUNNING
+    assert m.instruction() == "Open the fridge door with the right hand."
+    assert m.state_fields().index == 0
+    assert m.state_fields().status is SubtaskStatus.RUNNING
+
+
+def test_new_prompt_goes_cancel_then_cmd():
+    m = running_machine()
+    m.on_cmd(plan_id="p-1-0001", index=0, action="", instruction="", cancel=True, now=101.0)
+    assert m.accepts_cmd()
+    m.on_cmd(plan_id="p-1-0001", index=1, action="pick",
+             instruction="Pick up the cucumber.", cancel=False, now=102.0)
     assert m.instruction() == "Pick up the cucumber."
     assert m.state_fields().index == 1
 
@@ -105,14 +118,28 @@ def test_move_to_fails_unsupported():
     assert f.plan_id == "p-1-0002"  # FAILED names the rejected cmd
 
 
-def test_unsupported_preempting_running_task_freezes():
+def test_unsupported_cmd_while_running_is_ignored_too():
     m = running_machine()
     effect = m.on_cmd(
         plan_id="p-1-0001", index=1, action="open", instruction="  ", cancel=False, now=101.0
     )
-    assert effect is Effect.FREEZE
-    assert m.state_fields().status is SubtaskStatus.FAILED
-    assert m.instruction() is None
+    assert effect is Effect.NONE  # a broken cmd must not kill the running task
+    assert m.state_fields().status is SubtaskStatus.RUNNING
+    assert m.instruction() == "Open the fridge door with the right hand."
+
+
+def test_cmd_during_done_countdown_is_accepted():
+    from vla.progress_probe import ProgressState
+
+    m = running_machine()
+    assert m.on_progress(ProgressState.DONE, 0.8, now=110.0) is Effect.FREEZE
+    assert m.state_fields().status is SubtaskStatus.DONE
+    m.tick(now=110.1)  # still inside the ×3 window
+    assert m.accepts_cmd()
+    m.on_cmd(plan_id="p-1-0001", index=1, action="pick",
+             instruction="Pick up the cucumber.", cancel=False, now=110.2)
+    assert m.state_fields().status is SubtaskStatus.RUNNING
+    assert m.instruction() == "Pick up the cucumber."
 
 
 def test_failed_recovers_on_next_valid_cmd():

@@ -233,7 +233,7 @@ def main(config: Config) -> None:
 
             chunk = policy.predict(observation)
             if bridge is not None and bridge.instruction() != prompt:
-                # The subtask was cancelled or preempted while this
+                # The subtask was cancelled while this
                 # prediction was in flight: pushing it would unpin the
                 # frozen posture (or act on the old instruction) — drop it.
                 continue
