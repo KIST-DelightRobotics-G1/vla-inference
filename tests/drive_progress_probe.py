@@ -28,7 +28,8 @@ REPL:
     0.42            one raw reading
     0.62 x20        20 readings (offline: dt apart; DDS: at 10 Hz)
     hold 6          repeat the last raw for 6 s (the plateau shortcut)
-    cmd Open it.    start a subtask (action "open", fresh index)
+    cmd Open it.    start a subtask (action "open", fresh index) —
+                    ignored while one is RUNNING: `cancel` first
     cancel          cancel the running subtask
     dt 0.5          offline step size
     state           print the current SubtaskState fields
@@ -39,7 +40,7 @@ Try (offline):
     cmd Open the fridge.          -> RUNNING
     0.1 x4   0.3 x4   0.5 x4      -> RUNNING, slope healthy
     0.62 x12                      -> grey-zone plateau: stays RUNNING (no verdict)
-    cmd Grab the cup.  0.4 x14    -> stuck under 0.55 -> FAILED x3 -> IDLE
+    cmd Grab the cup.  0.4 x28    -> low & flat past 10 s, held 3 s -> FAILED x3 -> IDLE
     cmd Close it.      0.2  0.75  -> >= 0.70: DONE at once, slope irrelevant
 
 Thresholds are CLI flags so the contract table in the design doc (3.1.1)
@@ -77,6 +78,8 @@ class Config:
     stuck_value_threshold: float = 0.55
     slope_stuck_threshold: float = 0.027
     window_s: float = 5.0
+    stall_min_elapsed_s: float = 10.0
+    stall_hold_s: float = 3.0
 
 
 class Driver:
@@ -89,6 +92,8 @@ class Driver:
             stuck_value_threshold=config.stuck_value_threshold,
             slope_stuck_threshold=config.slope_stuck_threshold,
             window_s=config.window_s,
+            stall_min_elapsed_s=config.stall_min_elapsed_s,
+            stall_hold_s=config.stall_hold_s,
         )
         self.online = config.domain is not None
         self.bridge = None

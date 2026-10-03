@@ -116,6 +116,8 @@ class Config:
     stuck_value_threshold: float = 0.55
     slope_stuck_threshold: float = 0.027
     slope_window_s: float = 5.0
+    stall_min_elapsed_s: float = 10.0
+    stall_hold_s: float = 3.0
 
 
 # ── sources ──────────────────────────────────────────────────────────────────
@@ -244,6 +246,8 @@ class ProgressViewer(QtWidgets.QWidget):
             stuck_value_threshold=config.stuck_value_threshold,
             slope_stuck_threshold=config.slope_stuck_threshold,
             window_s=config.slope_window_s,
+            stall_min_elapsed_s=config.stall_min_elapsed_s,
+            stall_hold_s=config.stall_hold_s,
         )
         self.marks: Marks | None = None
         self.replay = isinstance(source, Replay)

@@ -105,6 +105,26 @@ class Config:
     probe_dir: str = "shared/probe"
     """Where the per-rollout progress JSONL goes (host-mounted via shared/)."""
 
+    # ProgressMonitor thresholds (--probe with --cortex). Tune on real-robot
+    # logs; the viewer replays a log under different values (view_progress.py).
+    done_threshold: float = 0.70
+    """progress >= this -> DONE at once."""
+
+    stuck_value_threshold: float = 0.55
+    """Flat below this -> STALLED candidate; flat above -> stays RUNNING."""
+
+    slope_stuck_threshold: float = 0.027
+    """progress slope (per s) over --slope-window-s under which it is 'flat'."""
+
+    slope_window_s: float = 5.0
+    """Sliding window for the slope."""
+
+    stall_min_elapsed_s: float = 10.0
+    """No STALLED before this many seconds into a subtask (approach phase)."""
+
+    stall_hold_s: float = 3.0
+    """Low-and-flat must persist this long before STALLED."""
+
     task: str | None = None
     """Short task name for the progress log file name
     (<task>_<checkpoint>_<probe>_<NN>_<time>.jsonl). Default: the first words
@@ -191,7 +211,14 @@ def main(config: Config) -> None:
     if probe is not None and machine is not None:
         from .progress_probe import ProgressMonitor
 
-        monitor = ProgressMonitor()
+        monitor = ProgressMonitor(
+            done_threshold=config.done_threshold,
+            stuck_value_threshold=config.stuck_value_threshold,
+            slope_stuck_threshold=config.slope_stuck_threshold,
+            window_s=config.slope_window_s,
+            stall_min_elapsed_s=config.stall_min_elapsed_s,
+            stall_hold_s=config.stall_hold_s,
+        )
 
     try:
         # Wait for the sensors, then warm up the model off-stream: the first
