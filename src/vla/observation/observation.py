@@ -7,7 +7,7 @@ the policy stage's job — this dataclass carries what the sensors said, in
 model order, at one moment.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -26,3 +26,11 @@ class Observation:
     video: dict[str, np.ndarray]  # view -> (H, W, 3) uint8 RGB
     state: dict[str, np.ndarray]  # group -> (D,) float32
     prompt: str
+    # Timing of the frames that went in (optional — the builder fills these,
+    # synthetic observations in tests leave them empty):
+    camera_age_s: dict[str, float] = field(default_factory=dict)
+    """view -> age of its frame when the observation was built, seconds on
+    THIS machine's monotonic clock from DDS arrival (trustworthy)."""
+    camera_stamp_ns: dict[str, int] = field(default_factory=dict)
+    """view -> the sensor-side capture stamp (ext-sensor-io's clock; only
+    comparable to ours if the two clocks are synced)."""

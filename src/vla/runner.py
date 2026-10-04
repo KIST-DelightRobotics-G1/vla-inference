@@ -23,6 +23,7 @@ ext-sensor-io camera names — a 1-view checkpoint runs one subscriber, the
 3-view one runs three.
 """
 
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -94,6 +95,41 @@ class Config:
     report_s: float = 2.0
     """Seconds between status lines (inference latency, cursor health)."""
 
+    probe: str | None = None
+    """Progress probe: one .pt, or a JSON index {"<fit prompt>": "<.pt>", ...}
+    (shared/probe/probes.json). With the index the .pt whose prompt equals the
+    live instruction is selected per subtask (--cortex) and loaded on first
+    use; a cmd may force one with args=["probe=<name>"]. Only valid with the
+    checkpoint the probes were fitted on. None disables the probe."""
+
+    probe_dir: str = "shared/probe"
+    """Where the per-rollout progress JSONL goes (host-mounted via shared/)."""
+
+    # ProgressMonitor thresholds (--probe with --cortex). Tune on real-robot
+    # logs; the viewer replays a log under different values (view_progress.py).
+    done_threshold: float = 0.70
+    """progress >= this -> DONE at once."""
+
+    stuck_value_threshold: float = 0.55
+    """Flat below this -> STALLED candidate; flat above -> stays RUNNING."""
+
+    slope_stuck_threshold: float = 0.027
+    """progress slope (per s) over --slope-window-s under which it is 'flat'."""
+
+    slope_window_s: float = 5.0
+    """Sliding window for the slope."""
+
+    stall_min_elapsed_s: float = 10.0
+    """No STALLED before this many seconds into a subtask (approach phase)."""
+
+    stall_hold_s: float = 3.0
+    """Low-and-flat must persist this long before STALLED."""
+
+    task: str | None = None
+    """Short task name for the progress log file name
+    (<task>_<checkpoint>_<probe>_<NN>_<time>.jsonl). Default: the first words
+    of --prompt, or "cortex" with --cortex (live instructions)."""
+
 
 def main(config: Config) -> None:
     dds_cfg = load_dds_config(config.config)
@@ -114,6 +150,30 @@ def main(config: Config) -> None:
         )
     print(f"Checkpoint views: {views}")
 
+    # Progress probe (optional): hooks the DiT latent inside predict() —
+    # the score is a free byproduct of each inference, logged per rollout.
+    probe = None
+    progress_log = None
+    if config.probe is not None:
+        from .progress_probe import ProgressLog, ProgressProbe
+        from .progress_probe.progress_log import run_stem
+
+        probe = ProgressProbe(config.probe)
+        probe.attach(policy.torch_model)
+        if not config.cortex:
+            # Fixed prompt: pick its head once (a single .pt stays active and
+            # only warns on mismatch; a bank may yield none -> no score).
+            probe.select(config.prompt)
+        task = config.task or ("cortex" if config.cortex else config.prompt)
+        probe_label = os.path.splitext(os.path.basename(config.probe))[0]  # "probes" for the index
+        stem = run_stem(
+            config.probe_dir,
+            task,
+            os.path.basename(os.path.normpath(config.checkpoint)),
+            probe_label,
+        )
+        progress_log = ProgressLog(config.probe_dir, stem)
+
     # One participant for every Rx source (ChannelFactory convention); the
     # streamer's writer owns its Tx side separately.
     from cyclonedds.domain import DomainParticipant
@@ -132,12 +192,32 @@ def main(config: Config) -> None:
     streamer = LatentActionStreamer()
     tick_s = CONTROL_DT_NS / 1e9
 
+    # Cortex bridge (optional): DDS reader/writer + 10 Hz publisher around
+    # the SubtaskMachine. We hold the machine separately so the runner can
+    # feed it progress verdicts from the probe (see below).
+    machine = None
     bridge = None
     if config.cortex:
-        from .cortex import CortexBridge, SubtaskMachine
+        from .cortex import CortexBridge, Effect, SubtaskMachine
 
-        bridge = CortexBridge(
-            SubtaskMachine(step_timeout_s=config.step_timeout_s), cursor
+        machine = SubtaskMachine(step_timeout_s=config.step_timeout_s)
+        bridge = CortexBridge(machine, cursor)
+
+    # Progress monitor (only when probe AND cortex are both on): turns the
+    # probe raw stream into a DONE/STALLED verdict for the machine. Reset
+    # on every new subtask so the running max doesn't carry over.
+    monitor = None
+    last_subtask_id: tuple[str, int] = ("", 0)
+    if probe is not None and machine is not None:
+        from .progress_probe import ProgressMonitor
+
+        monitor = ProgressMonitor(
+            done_threshold=config.done_threshold,
+            stuck_value_threshold=config.stuck_value_threshold,
+            slope_stuck_threshold=config.slope_stuck_threshold,
+            window_s=config.slope_window_s,
+            stall_min_elapsed_s=config.stall_min_elapsed_s,
+            stall_hold_s=config.stall_hold_s,
         )
 
     try:
@@ -180,20 +260,73 @@ def main(config: Config) -> None:
 
             chunk = policy.predict(observation)
             if bridge is not None and bridge.instruction() != prompt:
-                # The subtask was cancelled or preempted while this
+                # The subtask was cancelled while this
                 # prediction was in flight: pushing it would unpin the
                 # frozen posture (or act on the old instruction) — drop it.
                 continue
             elapsed = time.monotonic() - t0
             cursor.push(chunk, skip_ticks=round(elapsed / tick_s))
 
+            progress = None
+            reading = None
+            if probe is not None:
+                # New subtask? (cortex) Select the head fitted on its prompt —
+                # or the cmd's probe= override — and reset the running max,
+                # BEFORE reading this prediction's score.
+                if machine is not None:
+                    current_subtask_id = machine.subtask_id()
+                    if current_subtask_id != last_subtask_id:
+                        probe.select(prompt, override=machine.probe_override())
+                        if monitor is not None:
+                            monitor.reset()
+                        last_subtask_id = current_subtask_id
+                # The hook fired inside predict(); this is that observation's
+                # score. One dot product on GPU + .item() sync — negligible.
+                # None = no head for this prompt: no score, no verdict.
+                raw = probe.read()
+                t_probe = time.monotonic()
+                # Perception -> probe latency budget, per prediction:
+                #   frame_age_ms  oldest camera frame's age at observation build
+                #   probe_lag_ms  that frame's DDS arrival -> probe score
+                #                 (= frame_age + build/predict/read, our clock)
+                #   sensor_lag_ms sensor capture stamp -> probe score
+                #                 (ext-sensor-io's clock; needs synced clocks)
+                timing = {"probe": probe.active_name}
+                if observation.camera_age_s:
+                    frame_age_s = max(observation.camera_age_s.values())
+                    oldest_stamp_ns = min(observation.camera_stamp_ns.values())
+                    timing.update({
+                        "frame_age_ms": frame_age_s * 1e3,
+                        "probe_lag_ms": (frame_age_s + (t_probe - t0)) * 1e3,
+                        "sensor_lag_ms": time.time() * 1e3 - oldest_stamp_ns / 1e6,
+                    })
+                if raw is not None and monitor is not None:
+                    now = time.monotonic()
+                    reading = monitor.update(raw, now)
+                    # Feed the verdict to the machine — DONE/STALLED transition.
+                    # Apply its cursor effect exactly as the bridge does for
+                    # cancel/timeout: FREEZE pins the last posture, otherwise
+                    # the chunk runs out and gearsonic blends to safe standing.
+                    effect = machine.on_progress(reading.state, reading.progress, now)
+                    if effect is Effect.FREEZE:
+                        cursor.freeze()
+                    progress = reading.progress
+                else:
+                    progress = raw
+                progress_log.append(progress, elapsed * 1e3, reading=reading, timing=timing)
+
             latency_sum += elapsed
             predictions += 1
             if t0 - last_report >= config.report_s:
                 stats = cursor.stats()
+                progress_part = (
+                    "" if probe is None
+                    else f"progress {'-' if progress is None else f'{progress:.2f}'} | "
+                )
                 print(
                     f"inference {latency_sum / predictions * 1e3:.0f}ms avg "
                     f"({predictions / (t0 - last_report):.1f}/s) | "
+                    f"{progress_part}"
                     f"published {streamer.published} | held {stats['held']} "
                     f"starved {stats['starved']} stale {stats['stale_pushes']} "
                     f"late {streamer.late}",
@@ -211,6 +344,9 @@ def main(config: Config) -> None:
         for camera in cameras.values():
             camera.stop()
         state_reader.stop()
+        if probe is not None:
+            probe.detach()
+            progress_log.close()
 
 
 if __name__ == "__main__":

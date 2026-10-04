@@ -38,7 +38,7 @@ RUN git clone --depth 1 --branch "${CYCLONEDDS_VERSION}" \
     cmake --build /tmp/cyclonedds/build --target install -j "$(nproc)" && \
     rm -rf /tmp/cyclonedds
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /uvx /usr/local/bin/
 RUN uv venv /opt/wheelenv --python 3.12 && \
     VIRTUAL_ENV=/opt/wheelenv uv pip install pip && \
     CYCLONEDDS_HOME=/opt/cyclonedds /opt/wheelenv/bin/python -m pip wheel \
@@ -74,7 +74,7 @@ COPY --from=dds-builder /wheels /wheels
 ENV CYCLONEDDS_HOME=/opt/cyclonedds
 
 # ─── python 3.12 venv (uv) ────────────────────────────────────────────────────
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:${PATH}
 RUN uv venv /opt/venv --python 3.12
 
@@ -160,6 +160,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY --from=hf-cache models--nvidia--Cosmos-Reason2-2B \
      /root/.cache/huggingface/hub/models--nvidia--Cosmos-Reason2-2B
 ENV HF_HUB_OFFLINE=1
+
+# ─── viewer: pyqtgraph (PyQt5) + the runtime libs libqxcb.so links ───────────
+# The 12 apt packages are the minimum found by adding them one at a time in an
+# empty noble container (PyQt5 5.15.11 / pyqtgraph 0.14.0); without
+# libglib2.0-0 even `import PyQt5.QtCore` fails. The window is drawn on the
+# HOST's X server — run.sh passes DISPLAY and the /tmp/.X11-unix socket.
+# Placed after the backbone COPY and before the source COPY so a rebuild
+# reuses every layer above and only re-runs what a code edit re-runs anyway.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 libgl1 libdbus-1-3 libfontconfig1 \
+    libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
+    libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install PyQt5==5.15.11 pyqtgraph==0.14.0
 
 COPY . .
 RUN uv pip install --no-deps -e . && \
