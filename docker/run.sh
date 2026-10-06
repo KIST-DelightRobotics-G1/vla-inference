@@ -30,10 +30,29 @@
 #                               image's models/ (SONIC encoder ONNX).
 #                               PYTHONDONTWRITEBYTECODE keeps root-owned
 #                               __pycache__ out of the host tree.
+#
+# CONTAINER / IMAGE override the names. IMAGE defaults to the tag build.sh
+# gives this branch (kist-vla-inference:<branch>); CONTAINER still defaults to
+# the plain name, so two accounts on one host MUST pass it or the second one
+# silently execs into the first one's container (whose mounts point at the
+# first one's home):
+#
+#   CONTAINER=kist-vla-inference-hy IMAGE=kist-vla-inference:probe-viewer \
+#       docker/run.sh
+#
+# The image only carries the dependencies — the code that actually runs is the
+# host checkout mounted above, so the branch here must match the image.
 set -euo pipefail
 
-CONTAINER=kist-vla-inference
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONTAINER="${CONTAINER:-kist-vla-inference}"
+BRANCH="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+if [ "${BRANCH}" = "HEAD" ]; then            # detached: name it by the commit
+    BRANCH="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+fi
+BRANCH="$(printf '%s' "${BRANCH}" | sed 's#[^A-Za-z0-9_.-]#-#g')"   # legal tag
+IMAGE_GIVEN="${IMAGE+x}"                     # user set it (before the default fills in)
+IMAGE="${IMAGE:-kist-vla-inference:${BRANCH}}"
 CHECKPOINT_DIR_GIVEN="${CHECKPOINT_DIR+x}"   # user set it (before the default fills in)
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${HOME}/checkpoint-4500}"
 
@@ -44,6 +63,12 @@ warn_reuse() {
         echo "WARNING: reusing the existing '${CONTAINER}' container — its mounts" >&2
         echo "         were fixed at creation and CHECKPOINT_DIR is IGNORED now." >&2
         echo "         To mount ${CHECKPOINT_DIR}:" >&2
+        echo "         docker rm -f ${CONTAINER}  # then re-run this script" >&2
+    fi
+    if [ -n "${IMAGE_GIVEN}" ]; then
+        echo "WARNING: reusing the existing '${CONTAINER}' container — it was built" >&2
+        echo "         from whatever image it was created with and IMAGE is IGNORED." >&2
+        echo "         To run ${IMAGE}:" >&2
         echo "         docker rm -f ${CONTAINER}  # then re-run this script" >&2
     fi
 }
@@ -57,6 +82,7 @@ elif [ "$(docker ps -aq -f name=^${CONTAINER}$)" ]; then
     exec docker exec -it "${CONTAINER}" /bin/bash
 fi
 
+echo "creating '${CONTAINER}' from ${IMAGE} (branch ${BRANCH})" >&2
 mkdir -p "${REPO_ROOT}/shared"
 # Let the container's X client reach the host X server (no-op without an X
 # session, e.g. plain SSH — the viewer then needs DISPLAY pointed elsewhere).
@@ -74,4 +100,4 @@ exec docker run -it --name "${CONTAINER}" \
     -v "${REPO_ROOT}/config":/workspace/kist-vla-inference/config \
     -e PYTHONDONTWRITEBYTECODE=1 \
     -v "${CHECKPOINT_DIR}":"/workspace/checkpoints/$(basename "${CHECKPOINT_DIR}")":ro \
-    kist-vla-inference /bin/bash
+    "${IMAGE}" /bin/bash

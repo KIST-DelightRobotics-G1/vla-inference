@@ -6,6 +6,12 @@
 # cache — see the Dockerfile's "baked backbone" section for how to seed it
 # once on a new host. For the slim replay-only image:
 #   docker/build.sh --target replay
+#
+# The image is tagged kist-vla-inference:<current branch>, so builds from
+# different branches — or from two user accounts on the same host — no longer
+# clobber one another's tag (main has no PyQt5, vla-inference-probe-viewer
+# does, and the loser of the race ends up a dangling <none> image). Override
+# the whole tag with IMAGE_TAG=.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -17,6 +23,14 @@ if [ ! -d "${HF_HUB_CACHE_DIR}/models--nvidia--Cosmos-Reason2-2B" ]; then
     exit 1
 fi
 
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+if [ "${BRANCH}" = "HEAD" ]; then            # detached: name it by the commit
+    BRANCH="$(git rev-parse --short HEAD)"
+fi
+BRANCH="$(printf '%s' "${BRANCH}" | sed 's#[^A-Za-z0-9_.-]#-#g')"   # legal tag
+IMAGE_TAG="${IMAGE_TAG:-kist-vla-inference:${BRANCH}}"
+
+echo "building ${IMAGE_TAG}" >&2
 exec docker build -f docker/Dockerfile \
     --build-context hf-cache="${HF_HUB_CACHE_DIR}" \
-    -t kist-vla-inference "$@" .
+    -t "${IMAGE_TAG}" "$@" .
