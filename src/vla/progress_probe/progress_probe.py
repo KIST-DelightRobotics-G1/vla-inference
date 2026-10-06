@@ -33,21 +33,22 @@ FEATURE_DIM = 2048
 
 
 class ProbeHead:
-    """One probe .pt folded into a single dot product (+ its fit metadata)."""
+    """One probe .pt folded into a single dot product (+ its fit metadata).
+
+    The fuse: y = w·((x-mu)/sd) + b = (w/sd)·x + (b - (w/sd)·mu), which saves
+    2048 subs + 2048 divs per read().
+    """
 
     def __init__(self, probe_path: str):
         payload = torch.load(probe_path, map_location="cpu", weights_only=False)
         linear = torch.nn.Linear(FEATURE_DIM, 1)
         linear.load_state_dict(payload["w"])
         linear.eval()
-        w = linear.weight.detach().squeeze(0).float()   # (2048,)
+        w = linear.weight.detach().squeeze(0).float()
         b = float(linear.bias.detach().item())
-        mu = payload["mu"].float()                       # (2048,)
-        sd = payload["sd"].float()                       # (2048,)
-        # Fuse (x - mu)/sd then Linear into ONE dot product:
-        #   y = w·((x-mu)/sd) + b = (w/sd)·x + (b - (w/sd)·mu)
-        # Saves 2048 subs + 2048 divs per read().
-        self.w_eff = (w / sd).contiguous()               # (2048,)
+        mu = payload["mu"].float()
+        sd = payload["sd"].float()
+        self.w_eff = (w / sd).contiguous()
         self.b_eff = b - float((self.w_eff * mu).sum().item())
         self.meta: dict = payload.get("meta", {})
         self.path = probe_path
@@ -59,7 +60,6 @@ class ProbeHead:
         if self.w_eff.device != feature.device:
             self.w_eff = self.w_eff.to(feature.device)
         with torch.no_grad():
-            # One dot product + bias. .item() drains the sync predict() left.
             return float((self.w_eff @ feature).item()) + self.b_eff
 
 
@@ -84,14 +84,13 @@ class ProgressProbe:
     """
 
     def __init__(self, path: str):
-        self._cache: dict[str, ProbeHead] = {}       # .pt path -> loaded head
+        self._cache: dict[str, ProbeHead] = {}
         self._feature: torch.Tensor | None = None
         self._handle = None
         if path.endswith(".json"):
             with open(path) as f:
                 index: dict[str, str] = json.load(f)
             base = os.path.dirname(os.path.abspath(path))
-            # prompt -> absolute .pt path; nothing loaded yet
             self.index = {prompt: os.path.join(base, rel) for prompt, rel in index.items()}
             self.active: ProbeHead | None = None
             self.strict = True
@@ -112,8 +111,6 @@ class ProgressProbe:
             self._cache[pt_path] = head
             print(f"[ProgressProbe] loaded {head.name}  prompt={head.prompt!r}  extractor={head.extractor}")
         return head
-
-    # ── head selection ────────────────────────────────────────────────────
 
     @property
     def active_name(self) -> str | None:
@@ -137,7 +134,6 @@ class ProgressProbe:
         print(f"[ProgressProbe] select: {chosen.reason}")
         return self.active_name
 
-    # keep the old single-probe accessor
     @property
     def meta(self) -> dict:
         return {} if self.active is None else self.active.meta
@@ -154,14 +150,16 @@ class ProgressProbe:
             )
 
     def attach(self, model: torch.nn.Module) -> None:
-        """Hook `model.action_head.vl_self_attention` (fires once per predict)."""
+        """Hook `model.action_head.vl_self_attention` (fires once per predict).
+
+        The grabbed (B, seq, 2048) -> (2048,) mean stays on the GPU: read()
+        forces the sync at the end via .item(), which preserves CUDA overlap
+        during predict().
+        """
         module = model.action_head.vl_self_attention
 
         def grab(_module, _inputs, output):
             tensor = output[0] if isinstance(output, tuple) else output
-            # (B, seq, 2048) -> (2048,): stay on GPU (no .cpu() mid-forward).
-            # read() forces the sync at the end via .item() — this preserves
-            # CUDA overlap during predict().
             self._feature = tensor.detach().float().mean(dim=1).squeeze(0)
 
         self._handle = module.register_forward_hook(grab)

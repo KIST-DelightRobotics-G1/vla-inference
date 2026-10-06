@@ -21,21 +21,21 @@ from enum import Enum
 class ProgressState(str, Enum):
     """Verdict fed to SubtaskMachine.on_progress(state, progress, now)."""
 
-    RUNNING = "running"    # still in progress
-    DONE = "done"          # complete: progress >= done_threshold (absolute only)
-    STALLED = "stalled"    # failed: stuck at low progress
+    RUNNING = "running"
+    DONE = "done"
+    STALLED = "stalled"
 
 
 @dataclass
 class Reading:
     """One monitor tick, ready to log or feed into on_progress."""
 
-    raw: float                    # probe's raw score, unclipped
-    progress: float               # running max, clipped to [0, 1]
-    slope_per_s: float | None     # 5s slope, None until the window fills
-    stalled: bool                 # low & flat, past the grace period, held stall_hold_s -> STALLED
-    plateaued: bool               # stuck at/above it — informational, no verdict
-    done: bool                    # progress >= done_threshold
+    raw: float
+    progress: float
+    slope_per_s: float | None
+    stalled: bool
+    plateaued: bool
+    done: bool
     state: ProgressState
 
 
@@ -49,9 +49,9 @@ class ProgressMonitor:
     def __init__(
         self,
         *,
-        done_threshold: float = 0.70,
+        done_threshold: float = 0.75,
         stuck_value_threshold: float = 0.55,
-        slope_stuck_threshold: float = 0.027,   # per second
+        slope_stuck_threshold: float = 0.027,
         window_s: float = 5.0,
         stall_min_elapsed_s: float = 10.0,
         stall_hold_s: float = 3.0,
@@ -61,7 +61,7 @@ class ProgressMonitor:
         reset() (the approach phase of a task is low and flat by nature), and
         that condition holding continuously for `stall_hold_s` (a single flat
         window is not a verdict). DONE is unaffected: progress >= done_threshold
-        fires at once."""
+        fires at once. slope_stuck_threshold is per second."""
         self._done_th = done_threshold
         self._stuck_val_th = stuck_value_threshold
         self._slope_th = slope_stuck_threshold
@@ -75,21 +75,18 @@ class ProgressMonitor:
         self._running_max = 0.0
         self._history: deque[tuple[float, float]] = deque()
         self._t_start: float | None = None
-        self._stall_since: float | None = None   # when the stall condition began
+        self._stall_since: float | None = None
 
     def update(self, raw: float, now: float) -> Reading:
         if self._t_start is None:
             self._t_start = now
-        # 1) running max, clipped to [0, 1]
         progress = min(1.0, max(0.0, max(self._running_max, raw)))
         self._running_max = progress
 
-        # 2) 5s sliding window of (t, progress)
         self._history.append((now, progress))
         while self._history and now - self._history[0][0] > self._window_s:
             self._history.popleft()
 
-        # 3) slope — only when the window is nearly full (avoid warmup noise)
         slope: float | None = None
         if len(self._history) >= 2:
             t0, p0 = self._history[0]
@@ -97,13 +94,8 @@ class ProgressMonitor:
             if span >= self._window_s * 0.95:
                 slope = (progress - p0) / span
 
-        # 4) stuck branch: slope low AND which side of stuck_value_threshold.
-        #    Only the low side is a verdict (STALLED); `plateaued` is kept as
-        #    a diagnostic flag — a high plateau is not evidence of completion.
         stuck = slope is not None and slope < self._slope_th
         plateaued = stuck and progress >= self._stuck_val_th
-        # Low-and-flat must (a) start after the grace period and (b) persist
-        # for stall_hold_s before it counts as STALLED.
         low_flat = stuck and progress < self._stuck_val_th
         if low_flat and now - self._t_start >= self._stall_min_elapsed_s:
             if self._stall_since is None:
@@ -113,10 +105,8 @@ class ProgressMonitor:
             self._stall_since = None
             stalled = False
 
-        # 5) done: the absolute threshold, nothing else
         done = progress >= self._done_th
 
-        # 6) verdict — stalled and done are disjoint (stuck_val_th <= done_th)
         if stalled:
             state = ProgressState.STALLED
         elif done:

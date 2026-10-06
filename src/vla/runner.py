@@ -107,7 +107,7 @@ class Config:
 
     # ProgressMonitor thresholds (--probe with --cortex). Tune on real-robot
     # logs; the viewer replays a log under different values (view_progress.py).
-    done_threshold: float = 0.70
+    done_threshold: float = 0.75
     """progress >= this -> DONE at once."""
 
     stuck_value_threshold: float = 0.55

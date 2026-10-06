@@ -112,7 +112,7 @@ class Config:
     """DDS domain id override."""
 
     # ProgressMonitor thresholds — the design doc's four knobs.
-    done_threshold: float = 0.70
+    done_threshold: float = 0.75
     stuck_value_threshold: float = 0.55
     slope_stuck_threshold: float = 0.027
     slope_window_s: float = 5.0

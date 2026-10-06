@@ -41,7 +41,7 @@ Try (offline):
     0.1 x4   0.3 x4   0.5 x4      -> RUNNING, slope healthy
     0.62 x12                      -> grey-zone plateau: stays RUNNING (no verdict)
     cmd Grab the cup.  0.4 x28    -> low & flat past 10 s, held 3 s -> FAILED x3 -> IDLE
-    cmd Close it.      0.2  0.75  -> >= 0.70: DONE at once, slope irrelevant
+    cmd Close it.      0.2  0.8   -> >= 0.75: DONE at once, slope irrelevant
 
 Thresholds are CLI flags so the contract table in the design doc (3.1.1)
 can be tried live: --stuck-value-threshold 0.70 turns a grey-zone plateau
@@ -74,7 +74,7 @@ class Config:
     step_timeout_s: float = 0.0
     """SubtaskMachine step timeout (0 = off)."""
 
-    done_threshold: float = 0.70
+    done_threshold: float = 0.75
     stuck_value_threshold: float = 0.55
     slope_stuck_threshold: float = 0.027
     window_s: float = 5.0
