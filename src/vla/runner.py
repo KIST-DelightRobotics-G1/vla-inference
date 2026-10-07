@@ -208,6 +208,7 @@ def main(config: Config) -> None:
     # on every new subtask so the running max doesn't carry over.
     monitor = None
     last_subtask_id: tuple[str, int] = ("", 0)
+    subtask_t0 = 0.0
     if probe is not None and machine is not None:
         from .progress_probe import ProgressMonitor
 
@@ -280,6 +281,7 @@ def main(config: Config) -> None:
                         if monitor is not None:
                             monitor.reset()
                         last_subtask_id = current_subtask_id
+                        subtask_t0 = time.monotonic()
                 # The hook fired inside predict(); this is that observation's
                 # score. One dot product on GPU + .item() sync — negligible.
                 # None = no head for this prompt: no score, no verdict.
@@ -310,6 +312,14 @@ def main(config: Config) -> None:
                     effect = machine.on_progress(reading.state, reading.progress, now)
                     if effect is Effect.FREEZE:
                         cursor.freeze()
+                        f = machine.state_fields()
+                        slope = "-" if reading.slope_per_s is None else f"{reading.slope_per_s:.3f}/s"
+                        print(
+                            f"[Subtask] {f.plan_id}#{f.index} {f.status.name}: {f.detail} | "
+                            f"raw {reading.raw:.2f} slope {slope} "
+                            f"after {now - subtask_t0:.1f}s",
+                            flush=True,
+                        )
                     progress = reading.progress
                 else:
                     progress = raw
@@ -321,7 +331,8 @@ def main(config: Config) -> None:
                 stats = cursor.stats()
                 progress_part = (
                     "" if probe is None
-                    else f"progress {'-' if progress is None else f'{progress:.2f}'} | "
+                    else f"progress {'-' if progress is None else f'{progress:.2f}'} "
+                         f"{reading.state.value if reading is not None else '-'} | "
                 )
                 print(
                     f"inference {latency_sum / predictions * 1e3:.0f}ms avg "
