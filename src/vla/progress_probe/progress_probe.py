@@ -122,16 +122,23 @@ class ProgressProbe:
         yields None. A single-file probe stays active and only warns."""
         if not self.strict and override is None:
             self.check_prompt(instruction)
-            return self.active_name
-        chosen = pick(list(self.index.items()), instruction, override)
-        if chosen.path is None:
-            self.active = None
+            reason = "single .pt, always active"
         else:
-            self.active = self._load(chosen.path)
-            if self.active.prompt is not None and self.active.prompt != instruction and override is None:
+            chosen = pick(list(self.index.items()), instruction, override)
+            reason = chosen.reason
+            self.active = None if chosen.path is None else self._load(chosen.path)
+            if (self.active is not None and self.active.prompt is not None
+                    and self.active.prompt != instruction and override is None):
                 print(f"[ProgressProbe] WARNING: index says {self.active.name} for this prompt "
                       f"but its .pt was fitted on {self.active.prompt!r}")
-        print(f"[ProgressProbe] select: {chosen.reason}")
+        # One line per select — the answer to "is this task being scored, and
+        # by which .pt?" (grep PROBE / NO PROBE in the runner log).
+        if self.active is None:
+            print(f"[ProgressProbe] NO PROBE for {instruction!r} -> no score, no verdict ({reason})",
+                  flush=True)
+        else:
+            print(f"[ProgressProbe] PROBE {self.active.name} scores {instruction!r} ({reason})",
+                  flush=True)
         return self.active_name
 
     @property
