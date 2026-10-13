@@ -291,3 +291,85 @@ def test_camera_type_name_matches_ext_sensor_io():
 
     src = io.open(c.__file__, encoding="utf-8").read()
     assert 'typename="kist_msgs::msg::dds_::CompressedColorFrame_"' in src
+
+
+# ── per-subtask args: verdict=off, timeout=<s> ────────────────────────────────
+
+
+def test_verdict_off_ends_done_at_timeout():
+    from vla.progress_probe import ProgressState
+
+    m = running_machine(step_timeout_s=30.0)  # scored default: FAILED at timeout
+    m.on_cmd(plan_id="p-1-0001", index=0, action="", instruction="", cancel=True, now=101.0)
+    m.on_cmd(plan_id="p-1-0001", index=1, action="push", instruction="Push the drawer closed.",
+             cancel=False, now=102.0, args=("verdict=off", "timeout=8"))
+    assert not m.scored()
+    assert m.timeout_s() == 8.0
+    # a stray probe verdict must not end an unscored subtask
+    assert m.on_progress(ProgressState.DONE, 0.9, now=103.0) is Effect.NONE
+    assert m.on_progress(ProgressState.STALLED, 0.1, now=103.0) is Effect.NONE
+    assert m.state_fields().status is SubtaskStatus.RUNNING
+    assert m.tick(now=109.9) is Effect.NONE
+    assert m.tick(now=110.0) is Effect.FREEZE
+    f = m.state_fields()
+    assert f.status is SubtaskStatus.DONE
+    assert f.detail == "done (timeout 8s)"
+    for t in (110.1, 110.2, 110.3):
+        m.tick(now=t)
+    assert m.state_fields().status is SubtaskStatus.IDLE  # ×3 then auto-reset
+    assert not m.scored()
+
+
+def test_timeout_arg_overrides_default_and_stays_failed_when_scored():
+    m = SubtaskMachine(step_timeout_s=30.0)
+    m.on_cmd(plan_id="p", index=0, action="open", instruction="Open.", cancel=False,
+             now=100.0, args=("timeout=5",))
+    assert m.scored()
+    assert m.timeout_s() == 5.0
+    assert m.tick(now=105.0) is Effect.FREEZE
+    f = m.state_fields()
+    assert f.status is SubtaskStatus.FAILED
+    assert f.detail == "timeout 5s"
+
+
+def test_timeout_arg_zero_disables_for_that_subtask():
+    m = SubtaskMachine(step_timeout_s=30.0)
+    m.on_cmd(plan_id="p", index=0, action="open", instruction="Open.", cancel=False,
+             now=100.0, args=("timeout=0",))
+    assert m.timeout_s() == 0.0
+    assert m.tick(now=1e9) is Effect.NONE
+    assert m.state_fields().status is SubtaskStatus.RUNNING
+
+
+def test_verdict_off_without_timeout_runs_until_cancel():
+    m = SubtaskMachine()
+    m.on_cmd(plan_id="p", index=0, action="push", instruction="Push.", cancel=False,
+             now=100.0, args=("verdict=off",))
+    assert not m.scored()
+    assert m.tick(now=1e9) is Effect.NONE
+    assert m.state_fields().status is SubtaskStatus.RUNNING
+    assert m.on_cmd(plan_id="p", index=0, action="", instruction="", cancel=True,
+                    now=1e9 + 1) is Effect.FREEZE
+    assert m.state_fields().status is SubtaskStatus.IDLE
+
+
+def test_args_knobs_reset_on_the_next_subtask():
+    m = SubtaskMachine(step_timeout_s=30.0)
+    m.on_cmd(plan_id="p", index=0, action="push", instruction="Push.", cancel=False,
+             now=100.0, args=("verdict=off", "timeout=8"))
+    m.tick(now=108.0)
+    m.on_cmd(plan_id="p", index=1, action="open", instruction="Open.", cancel=False, now=108.1)
+    assert m.scored()
+    assert m.timeout_s() == 30.0
+
+
+def test_cmd_args_parse():
+    from vla.cortex import cmd_args
+
+    a = cmd_args.parse(["fridge_door", "probe=probe_pick_v2.pt", "verdict=off", "timeout=8.5"])
+    assert (a.probe, a.verdict, a.timeout_s) == ("probe_pick_v2", False, 8.5)
+    d = cmd_args.parse(["fridge_door"])
+    assert (d.probe, d.verdict, d.timeout_s) == (None, True, None)
+    # malformed values are ignored, never fatal
+    bad = cmd_args.parse(["timeout=soon", "verdict=maybe"])
+    assert bad.timeout_s is None and bad.verdict is True

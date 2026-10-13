@@ -12,6 +12,7 @@ The v0.3 state machine (a RUNNING subtask is never replaced, only ended):
                           │  │──probe: DONE───────────────▶ DONE ×3 → IDLE
                           │  │──probe: STALLED────────────▶ FAILED ×3 → IDLE
                           │  └──step timeout──────────────▶ FAILED ×3 → IDLE
+                          │        (args verdict=off: ───▶ DONE ×3 → IDLE)
                           │
                           └── any other cmd while RUNNING: IGNORED (no change)
     IDLE ──unsupported cmd──▶ FAILED ×3 → IDLE      "unsupported: <why>"
@@ -26,8 +27,14 @@ its (plan_id, index) never appear in SubtaskState; the bridge logs it.
 DONE and FAILED are published for _FINAL_REPEATS bridge ticks (~300 ms) as
 QoS edge-loss insurance, then auto-reset to IDLE per the ICD.
 
+Per-subtask knobs ride in the cmd's args (cmd_args.py): `verdict=off` runs
+the subtask unscored — no probe, no DONE/STALLED — and lets its timeout end
+it as DONE ("done (timeout <s>s)") instead of FAILED; `timeout=<s>` sets
+that subtask's step timeout over the runner's default.
+
 Appendix-A detail values: "" (nominal), "cancelled", "unsupported: <why>",
-"timeout <s>s", "done (progress N.NN)", "stalled at N.NN". Deferred variants
+"timeout <s>s", "done (progress N.NN)", "stalled at N.NN",
+"done (timeout <s>s)". Deferred variants
 (cancel_deferred / preempt_deferred / cancelled_at_safe_point) never occur:
 cancel is immediate and preemption does not exist. "estop" is gearsonic's
 safety layer, not ours.
@@ -43,7 +50,8 @@ from enum import Enum
 
 from common.cyclonedds.cortex_msgs import SubtaskStatus
 
-from ..progress_probe import ProgressState, override_from_args
+from ..progress_probe import ProgressState
+from . import cmd_args
 
 # Actions this module cannot perform — the ICD routes move_to to nav.
 UNSUPPORTED_ACTIONS = frozenset({"move_to"})
@@ -87,6 +95,8 @@ class SubtaskMachine:
         self._action = ""
         self._instruction = ""
         self._args: tuple[str, ...] = ()
+        self._verdict = True            # False: unscored, timeout -> DONE
+        self._subtask_timeout_s = 0.0   # this subtask's (args or default)
         self._detail = ""
         self._progress = 0.0            # last probe verdict's progress, published
         self._deadline: float | None = None
@@ -123,7 +133,7 @@ class SubtaskMachine:
         RUNNING → DONE (state=DONE) or FAILED (state=STALLED) with FREEZE.
         Anything else is a no-op (already terminal, or not our concern)."""
         with self._lock:
-            if self._status is not SubtaskStatus.RUNNING:
+            if self._status is not SubtaskStatus.RUNNING or not self._verdict:
                 return Effect.NONE
             self._progress = progress
             if state is ProgressState.DONE:
@@ -150,13 +160,20 @@ class SubtaskMachine:
                     self._reset_to_idle()
                 return Effect.NONE
             # Step timeout — bridge's own clock, independent of orchestrator.
+            # An unscored subtask (verdict=off) has no other way to end
+            # well: its timeout IS the plan, so it lands as DONE.
             if (
                 self._status is SubtaskStatus.RUNNING
                 and self._deadline is not None
                 and now >= self._deadline
             ):
-                self._status = SubtaskStatus.FAILED
-                self._detail = f"timeout {self._timeout_s:g}s"
+                t = self._subtask_timeout_s
+                if self._verdict:
+                    self._status = SubtaskStatus.FAILED
+                    self._detail = f"timeout {t:g}s"
+                else:
+                    self._status = SubtaskStatus.DONE
+                    self._detail = f"done (timeout {t:g}s)"
                 self._deadline = None
                 self._final_left = _FINAL_REPEATS
                 return Effect.FREEZE
@@ -201,9 +218,16 @@ class SubtaskMachine:
         self._status = SubtaskStatus.RUNNING
         self._instruction = instruction
         self._args = tuple(args)
+        knobs = cmd_args.parse(self._args)
+        self._verdict = knobs.verdict
+        self._subtask_timeout_s = (
+            self._timeout_s if knobs.timeout_s is None else knobs.timeout_s
+        )
         self._detail = ""
         self._progress = 0.0
-        self._deadline = now + self._timeout_s if self._timeout_s > 0 else None
+        self._deadline = (
+            now + self._subtask_timeout_s if self._subtask_timeout_s > 0 else None
+        )
         # Starting needs no cursor effect: the inference loop picks up the
         # instruction on its next build and the first chunk unpins the cursor.
         return Effect.NONE
@@ -217,6 +241,8 @@ class SubtaskMachine:
         self._action = ""
         self._instruction = ""
         self._args = ()
+        self._verdict = True
+        self._subtask_timeout_s = 0.0
         self._detail = detail
         self._progress = 0.0
         self._deadline = None
@@ -236,7 +262,21 @@ class SubtaskMachine:
         with self._lock:
             if self._status is not SubtaskStatus.RUNNING:
                 return None
-            return override_from_args(self._args)
+            return cmd_args.parse(self._args).probe
+
+    def scored(self) -> bool:
+        """True while a RUNNING subtask takes probe verdicts. False on
+        `verdict=off` (runner: select no head, read no score) and while
+        nothing is running."""
+        with self._lock:
+            return self._status is SubtaskStatus.RUNNING and self._verdict
+
+    def timeout_s(self) -> float:
+        """The RUNNING subtask's step timeout (args or default), 0 = none."""
+        with self._lock:
+            if self._status is not SubtaskStatus.RUNNING:
+                return 0.0
+            return self._subtask_timeout_s
 
     def subtask_id(self) -> tuple[str, int]:
         """(plan_id, index) of the RUNNING subtask, ('', 0) otherwise.

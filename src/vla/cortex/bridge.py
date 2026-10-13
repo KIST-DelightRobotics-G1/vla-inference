@@ -132,10 +132,15 @@ class CortexBridge:
                       f"busy with {running[0]}#{running[1]} — cancel it first")
             else:
                 print(f"[CortexBridge] cmd {kind} ({cmd.plan_id}#{cmd.index})")
+                if not cmd.cancel and not self._machine.scored():
+                    t = self._machine.timeout_s()
+                    how = f"DONE at timeout {t:g}s" if t > 0 else "NO TIMEOUT: ends only by cancel"
+                    print(f"[CortexBridge]   verdict=off -> unscored, {how}")
         effect = self._machine.tick(now)
         if effect is Effect.FREEZE:
-            # Time-based end of a subtask (step timeout) — the probe verdicts
-            # are logged by the runner; this is the only transition made here.
+            # Time-based end of a subtask (step timeout: FAILED, or DONE for
+            # an unscored one) — the probe verdicts are logged by the runner;
+            # this is the only transition made here.
             f = self._machine.state_fields()
             print(f"[Subtask] {f.plan_id}#{f.index} {f.status.name}: {f.detail}", flush=True)
         self._apply(effect)

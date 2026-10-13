@@ -102,6 +102,7 @@ class ProgressProbe:
             self.index = {head.prompt or "": path}
             self.active = head
             self.strict = False
+        self._single: ProbeHead | None = None if self.strict else self.active
         print("[ProgressProbe] the running checkpoint must be the model the probes were fitted on")
 
     def _load(self, pt_path: str) -> ProbeHead:
@@ -121,6 +122,7 @@ class ProgressProbe:
         stem). Returns its name, or None when nothing matches — then read()
         yields None. A single-file probe stays active and only warns."""
         if not self.strict and override is None:
+            self.active = self._single  # back after a deselect()
             self.check_prompt(instruction)
             reason = "single .pt, always active"
         else:
@@ -140,6 +142,13 @@ class ProgressProbe:
             print(f"[ProgressProbe] PROBE {self.active.name} scores {instruction!r} ({reason})",
                   flush=True)
         return self.active_name
+
+    def deselect(self, instruction: str, reason: str) -> None:
+        """Score nothing until the next select(): read() yields None. For a
+        subtask the orchestrator runs unscored (args verdict=off)."""
+        self.active = None
+        print(f"[ProgressProbe] NO PROBE for {instruction!r} -> no score, no verdict ({reason})",
+              flush=True)
 
     @property
     def meta(self) -> dict:

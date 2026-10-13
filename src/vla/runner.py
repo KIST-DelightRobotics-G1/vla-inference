@@ -66,7 +66,9 @@ class Config:
     step_timeout_s: float = 0.0
     """--cortex only: fail a RUNNING subtask after this many seconds
     (detail "timeout <s>s", posture held). <= 0 disables (v0.1 default —
-    tune after real-robot measurement)."""
+    tune after real-robot measurement). A cmd overrides it per subtask with
+    args timeout=<s>; with args verdict=off the subtask is unscored and its
+    timeout ends it as DONE instead (src/vla/cortex/cmd_args.py)."""
 
     embodiment_tag: str = "unitree_g1_sonic_3views"
     """Which of the checkpoint's embodiments to run."""
@@ -273,11 +275,15 @@ def main(config: Config) -> None:
             if probe is not None:
                 # New subtask? (cortex) Select the head fitted on its prompt —
                 # or the cmd's probe= override — and reset the running max,
-                # BEFORE reading this prediction's score.
+                # BEFORE reading this prediction's score. verdict=off: no
+                # head at all, so read() stays None and no verdict is fed.
                 if machine is not None:
                     current_subtask_id = machine.subtask_id()
                     if current_subtask_id != last_subtask_id:
-                        probe.select(prompt, override=machine.probe_override())
+                        if machine.scored():
+                            probe.select(prompt, override=machine.probe_override())
+                        else:
+                            probe.deselect(prompt, "verdict=off: unscored, ends by timeout")
                         if monitor is not None:
                             monitor.reset()
                         last_subtask_id = current_subtask_id
