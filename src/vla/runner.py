@@ -106,19 +106,24 @@ class Config:
 
     probe: str | None = None
     """Progress probe: one .pt, or a JSON index (shared/probe/<ckpt>/probes.json)
-    {"<fit prompt>": "<.pt>", ..., "<prompt without a head>": <seconds>, ...}.
-    With the index the .pt whose prompt equals the live instruction is
-    selected per subtask (--cortex) and loaded on first use; a cmd may force
-    one with args=["probe=<name>"]. A prompt listed with a number instead of
-    a .pt runs unscored and is DONE that many seconds after it starts. Only
-    valid with the checkpoint the probes were fitted on. None disables the
-    probe."""
+    {"<fit prompt>": "<.pt>", "<fit prompt>": {"pt": "<.pt>", "done_threshold":
+    0.8, ...}, "<prompt without a head>": <seconds>, ...}. With the index the
+    .pt whose prompt equals the live instruction is selected per subtask
+    (--cortex) and loaded on first use; a cmd may force one with
+    args=["probe=<name>"]. An object entry also sets that sentence's own
+    ProgressMonitor thresholds (keys = the --done-threshold ... --stall-hold-s
+    flags; unset ones keep the CLI values). A prompt listed with a number
+    instead of a .pt runs unscored and is DONE that many seconds after it
+    starts. Only valid with the checkpoint the probes were fitted on. None
+    disables the probe."""
 
     probe_dir: str = "shared/probe"
     """Where the per-rollout progress JSONL goes (host-mounted via shared/)."""
 
-    # ProgressMonitor thresholds (--probe with --cortex). Tune on real-robot
-    # logs; the viewer replays a log under different values (view_progress.py).
+    # ProgressMonitor thresholds (--probe with --cortex): the defaults for
+    # every scored subtask; a probes.json object entry overrides them per
+    # sentence. Tune on real-robot logs; the viewer replays a log under
+    # different values (view_progress.py).
     done_threshold: float = 0.75
     """progress >= this -> DONE at once."""
 
@@ -292,13 +297,21 @@ def main(config: Config) -> None:
             reading = None
             if probe is not None:
                 # New subtask? (cortex) Select the head fitted on its prompt —
-                # or the cmd's probe= override — and reset the running max,
-                # BEFORE reading this prediction's score.
+                # or the cmd's probe= override — apply the sentence's own
+                # thresholds and reset the running max, BEFORE reading this
+                # prediction's score. (An unscored sentence selects no head:
+                # read() stays None, no verdict is fed.)
                 if machine is not None:
                     current_subtask_id = machine.subtask_id()
                     if current_subtask_id != last_subtask_id:
                         probe.select(prompt, override=machine.probe_override())
                         if monitor is not None:
+                            over = probe.thresholds.get(prompt, {})
+                            monitor.configure(over)
+                            if over:
+                                print("[ProgressMonitor] thresholds for this subtask: "
+                                      + " ".join(f"{k}={v:g}" for k, v in over.items()),
+                                      flush=True)
                             monitor.reset()
                         last_subtask_id = current_subtask_id
                         subtask_t0 = time.monotonic()

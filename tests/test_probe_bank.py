@@ -7,6 +7,7 @@ import pytest
 from vla.cortex import SubtaskMachine
 from vla.progress_probe import override_from_args, pick
 from vla.progress_probe.probe_bank import load_index
+from vla.progress_probe import ProgressMonitor, ProgressState
 
 PICK = ("Reach out with the right hand and pick up the cucumber inside", "/p/probe_pick.pt")
 PLACE = ("Place the cucumber on the plate", "/p/probe_place.pt")
@@ -51,9 +52,49 @@ def test_load_index_splits_heads_and_timeouts(tmp_path):
         "Walk up to the fridge.": 8,
         "Step back from the refrigerator.": 5.5,
     }))
-    heads, timeouts = load_index(str(p))
-    assert heads == {PICK[0]: str(tmp_path / "probe_pick.pt")}
-    assert timeouts == {"Walk up to the fridge.": 8.0, "Step back from the refrigerator.": 5.5}
+    ix = load_index(str(p))
+    assert ix.heads == {PICK[0]: str(tmp_path / "probe_pick.pt")}
+    assert ix.timeouts == {"Walk up to the fridge.": 8.0, "Step back from the refrigerator.": 5.5}
+    assert ix.thresholds == {}
+
+
+def test_load_index_object_entry_carries_thresholds(tmp_path):
+    p = tmp_path / "probes.json"
+    p.write_text(json.dumps({
+        PICK[0]: {"pt": "probe_pick.pt", "stuck_value_threshold": 0, "done_threshold": 0.8},
+        PLACE[0]: {"pt": "probe_place.pt"},
+    }))
+    ix = load_index(str(p))
+    assert ix.heads == {PICK[0]: str(tmp_path / "probe_pick.pt"),
+                        PLACE[0]: str(tmp_path / "probe_place.pt")}
+    assert ix.thresholds == {PICK[0]: {"stuck_value_threshold": 0.0, "done_threshold": 0.8}}
+
+
+def test_load_index_object_entry_rejects_bad_keys(tmp_path):
+    p = tmp_path / "probes.json"
+    p.write_text(json.dumps({PICK[0]: {"done_threshold": 0.8}}))  # no pt
+    with pytest.raises(ValueError, match="pt"):
+        load_index(str(p))
+    p.write_text(json.dumps({PICK[0]: {"pt": "probe_pick.pt", "done_thresh": 0.8}}))
+    with pytest.raises(ValueError, match="unknown keys"):
+        load_index(str(p))
+    p.write_text(json.dumps({PICK[0]: {"pt": "probe_pick.pt", "done_threshold": "high"}}))
+    with pytest.raises(ValueError, match="number"):
+        load_index(str(p))
+
+
+def test_monitor_configure_overrides_then_restores_base():
+    m = ProgressMonitor(done_threshold=0.75)
+    assert m.update(0.78, now=0.0).state is ProgressState.DONE
+    m.configure({"done_threshold": 0.9})
+    m.reset()
+    assert m.update(0.78, now=0.0).state is ProgressState.RUNNING
+    assert m.update(0.91, now=0.1).state is ProgressState.DONE
+    m.configure({})  # the next sentence has no entry: back to the CLI value
+    m.reset()
+    assert m.update(0.78, now=0.0).state is ProgressState.DONE
+    with pytest.raises(ValueError):
+        m.configure({"done_thresh": 0.9})
 
 
 def test_load_index_rejects_other_values(tmp_path):

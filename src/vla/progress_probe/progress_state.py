@@ -10,12 +10,15 @@ orchestrator decides).
 
 reset() must be called on every new subtask — running max carried over
 from the previous subtask would make the new one look near-done from
-tick zero.
+tick zero. configure() before it applies that subtask's own thresholds
+(probes.json object entries) over the constructor's base values; an empty
+mapping restores the base.
 """
 
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
+from typing import Mapping
 
 
 class ProgressState(str, Enum):
@@ -62,13 +65,32 @@ class ProgressMonitor:
         that condition holding continuously for `stall_hold_s` (a single flat
         window is not a verdict). DONE is unaffected: progress >= done_threshold
         fires at once. slope_stuck_threshold is per second."""
-        self._done_th = done_threshold
-        self._stuck_val_th = stuck_value_threshold
-        self._slope_th = slope_stuck_threshold
-        self._window_s = window_s
-        self._stall_min_elapsed_s = stall_min_elapsed_s
-        self._stall_hold_s = stall_hold_s
+        self._base = dict(
+            done_threshold=done_threshold,
+            stuck_value_threshold=stuck_value_threshold,
+            slope_stuck_threshold=slope_stuck_threshold,
+            window_s=window_s,
+            stall_min_elapsed_s=stall_min_elapsed_s,
+            stall_hold_s=stall_hold_s,
+        )
+        self.configure({})
         self.reset()
+
+    def configure(self, overrides: Mapping[str, float]) -> dict[str, float]:
+        """Thresholds for the next subtask: the constructor's values with
+        `overrides` (ProgressMonitor keyword names) on top. Returns the
+        values in force. Does not reset() — call that too."""
+        unknown = sorted(set(overrides) - set(self._base))
+        if unknown:
+            raise ValueError(f"unknown ProgressMonitor thresholds {unknown}")
+        p = {**self._base, **overrides}
+        self._done_th = p["done_threshold"]
+        self._stuck_val_th = p["stuck_value_threshold"]
+        self._slope_th = p["slope_stuck_threshold"]
+        self._window_s = p["window_s"]
+        self._stall_min_elapsed_s = p["stall_min_elapsed_s"]
+        self._stall_hold_s = p["stall_hold_s"]
+        return p
 
     def reset(self) -> None:
         """Wipe running max and slope history — call on every new subtask."""

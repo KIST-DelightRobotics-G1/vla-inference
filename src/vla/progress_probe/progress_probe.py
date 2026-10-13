@@ -66,8 +66,10 @@ class ProgressProbe:
     """Hook a Gr00tN1d7 model once; score each prediction with the active head.
 
     `path` is one .pt (that head is active from the start, as before) or a
-    JSON index {"<fit prompt>": "<relative .pt path>" | <timeout s>, ...} —
-    a bank, one head per fitted prompt, plus the sentences that have no head
+    JSON index {"<fit prompt>": "<.pt>" | <timeout s> | {"pt": "<.pt>",
+    <monitor thresholds>}, ...} — a bank, one head per fitted prompt, each
+    with optional ProgressMonitor thresholds of its own (`thresholds`, the
+    runner applies them per subtask), plus the sentences that have no head
     and end by timeout instead (`timeouts`, read by the SubtaskMachine).
     With a bank nothing is active until select(): the runner calls it with
     the live instruction whenever the subtask changes; the matching .pt is
@@ -89,19 +91,25 @@ class ProgressProbe:
         self._feature: torch.Tensor | None = None
         self._handle = None
         if path.endswith(".json"):
-            self.index, self.timeouts = load_index(path)
+            loaded = load_index(path)
+            self.index = loaded.heads
+            self.timeouts = loaded.timeouts
+            self.thresholds = loaded.thresholds
             self.active: ProbeHead | None = None
             self.strict = True
             print(f"[ProgressProbe] index {path}: {len(self.index)} heads, "
                   f"{len(self.timeouts)} timeout-only prompts")
             for prompt, pt in self.index.items():
-                print(f"[ProgressProbe]   {os.path.basename(pt)}  <-  {prompt!r}")
+                over = self.thresholds.get(prompt)
+                extra = "" if not over else "  " + " ".join(f"{k}={v:g}" for k, v in over.items())
+                print(f"[ProgressProbe]   {os.path.basename(pt)}  <-  {prompt!r}{extra}")
             for prompt, t in self.timeouts.items():
                 print(f"[ProgressProbe]   DONE at {t:g}s (no head)  <-  {prompt!r}")
         else:
             head = self._load(path)
             self.index = {head.prompt or "": path}
             self.timeouts: dict[str, float] = {}
+            self.thresholds: dict[str, dict[str, float]] = {}
             self.active = head
             self.strict = False
         print("[ProgressProbe] the running checkpoint must be the model the probes were fitted on")

@@ -7,13 +7,17 @@ sentence the orchestrator may send, saying how a subtask with that
 instruction ENDS:
 
     "<fit prompt>": "probe_open.pt"    a head scores it: DONE / STALLED by verdict
+    "<fit prompt>": {"pt": "probe_open.pt", "done_threshold": 0.8}
+                                       same, with this sentence's own
+                                       ProgressMonitor thresholds (any of
+                                       MONITOR_KEYS; the rest = the CLI values)
     "<fit prompt>": 8                  no head: unscored, DONE 8 s after start
 
-`load_index()` splits the file into those two maps; `pick()` turns the
-first plus the live instruction into one path or None — None means "no
-probe for this prompt": no score, no verdict, the subtask ends by its
-unscored timeout (its number here, else the runner's --unscored-timeout-s).
-That beats scoring with a mismatched head.
+`load_index()` splits the file into those maps; `pick()` turns the heads
+plus the live instruction into one path or None — None means "no probe
+for this prompt": no score, no verdict, the subtask ends by its unscored
+timeout (its number here, else the runner's --unscored-timeout-s). That
+beats scoring with a mismatched head.
 
 Override: an orchestrator cmd may carry ``args=["probe=<name>"]`` to force a
 .pt by file stem — the experiment hook for comparing two fits of the same
@@ -27,28 +31,62 @@ from typing import Sequence
 
 OVERRIDE_KEY = "probe="
 
+# ProgressMonitor keyword arguments a probes.json object entry may set per
+# sentence — the same names as the runner's CLI flags.
+MONITOR_KEYS = frozenset({
+    "done_threshold", "stuck_value_threshold", "slope_stuck_threshold",
+    "window_s", "stall_min_elapsed_s", "stall_hold_s",
+})
 
-def load_index(path: str) -> tuple[dict[str, str], dict[str, float]]:
-    """probes.json -> ({prompt: absolute .pt path}, {prompt: timeout_s}).
 
-    A string value is a .pt relative to the json's directory; a number is
-    the unscored timeout in seconds for that sentence. Anything else is a
-    config error, raised here so a typo fails at startup, not mid-run."""
+@dataclass(frozen=True)
+class Index:
+    heads: dict[str, str]                 # prompt -> absolute .pt path
+    timeouts: dict[str, float]            # prompt -> unscored timeout (s)
+    thresholds: dict[str, dict[str, float]]  # prompt -> ProgressMonitor kwargs
+
+
+def _number(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def load_index(path: str) -> Index:
+    """probes.json -> Index. A string value is a .pt relative to the json's
+    directory; a number is the unscored timeout in seconds; an object is
+    {"pt": <.pt>, <monitor key>: <number>, ...}. Anything else is a config
+    error, raised here so a typo fails at startup, not mid-run."""
     with open(path) as f:
         raw = json.load(f)
     if not isinstance(raw, dict):
-        raise ValueError(f"{path}: expected an object {{prompt: .pt | seconds}}")
+        raise ValueError(f"{path}: expected an object {{prompt: .pt | seconds | {{pt, thresholds}}}}")
     base = os.path.dirname(os.path.abspath(path))
     heads: dict[str, str] = {}
     timeouts: dict[str, float] = {}
+    thresholds: dict[str, dict[str, float]] = {}
     for prompt, value in raw.items():
-        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-            raise ValueError(f"{path}: {prompt!r}: value must be a .pt name or seconds, got {value!r}")
         if isinstance(value, str):
             heads[prompt] = os.path.join(base, value)
-        else:
+        elif _number(value):
             timeouts[prompt] = float(value)
-    return heads, timeouts
+        elif isinstance(value, dict):
+            pt = value.get("pt")
+            if not isinstance(pt, str):
+                raise ValueError(f"{path}: {prompt!r}: object entry needs \"pt\": \"<name>.pt\"")
+            bad = sorted(set(value) - MONITOR_KEYS - {"pt"})
+            if bad:
+                raise ValueError(f"{path}: {prompt!r}: unknown keys {bad}; allowed: pt, "
+                                 f"{', '.join(sorted(MONITOR_KEYS))}")
+            heads[prompt] = os.path.join(base, pt)
+            over = {k: v for k, v in value.items() if k != "pt"}
+            for k, v in over.items():
+                if not _number(v):
+                    raise ValueError(f"{path}: {prompt!r}: {k} must be a number, got {v!r}")
+            if over:
+                thresholds[prompt] = {k: float(v) for k, v in over.items()}
+        else:
+            raise ValueError(f"{path}: {prompt!r}: value must be a .pt name, seconds, or "
+                             f"{{\"pt\": ..., thresholds}}, got {value!r}")
+    return Index(heads, timeouts, thresholds)
 
 
 @dataclass(frozen=True)
