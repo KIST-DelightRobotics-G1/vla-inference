@@ -293,83 +293,102 @@ def test_camera_type_name_matches_ext_sensor_io():
     assert 'typename="kist_msgs::msg::dds_::CompressedColorFrame_"' in src
 
 
-# ── per-subtask args: verdict=off, timeout=<s> ────────────────────────────────
+# ── scored vs unscored: the instruction decides ───────────────────────────────
+
+FITTED = {"Open the fridge door with the right hand.", "Pick up the cucumber."}
 
 
-def test_verdict_off_ends_done_at_timeout():
+def has_head(instruction: str, override: str | None) -> bool:
+    return instruction in FITTED or override == "probe_any"
+
+
+def test_unscored_instruction_ends_done_at_unscored_timeout():
     from vla.progress_probe import ProgressState
 
-    m = running_machine(step_timeout_s=30.0)  # scored default: FAILED at timeout
-    m.on_cmd(plan_id="p-1-0001", index=0, action="", instruction="", cancel=True, now=101.0)
-    m.on_cmd(plan_id="p-1-0001", index=1, action="push", instruction="Push the drawer closed.",
-             cancel=False, now=102.0, args=("verdict=off", "timeout=8"))
+    m = SubtaskMachine(step_timeout_s=30.0, scorer=has_head, unscored_timeout_s=8.0)
+    m.on_cmd(plan_id="p", index=0, action="approach", instruction="Walk up to the fridge.",
+             cancel=False, now=100.0, args=("fridge",))
     assert not m.scored()
     assert m.timeout_s() == 8.0
-    # a stray probe verdict must not end an unscored subtask
-    assert m.on_progress(ProgressState.DONE, 0.9, now=103.0) is Effect.NONE
-    assert m.on_progress(ProgressState.STALLED, 0.1, now=103.0) is Effect.NONE
+    # a stray verdict must not end an unscored subtask
+    assert m.on_progress(ProgressState.DONE, 0.9, now=101.0) is Effect.NONE
+    assert m.on_progress(ProgressState.STALLED, 0.1, now=101.0) is Effect.NONE
     assert m.state_fields().status is SubtaskStatus.RUNNING
-    assert m.tick(now=109.9) is Effect.NONE
-    assert m.tick(now=110.0) is Effect.FREEZE
+    assert m.tick(now=107.9) is Effect.NONE
+    assert m.tick(now=108.0) is Effect.FREEZE
     f = m.state_fields()
     assert f.status is SubtaskStatus.DONE
     assert f.detail == "done (timeout 8s)"
-    for t in (110.1, 110.2, 110.3):
+    for t in (108.1, 108.2, 108.3):
         m.tick(now=t)
     assert m.state_fields().status is SubtaskStatus.IDLE  # ×3 then auto-reset
     assert not m.scored()
 
 
-def test_timeout_arg_overrides_default_and_stays_failed_when_scored():
-    m = SubtaskMachine(step_timeout_s=30.0)
-    m.on_cmd(plan_id="p", index=0, action="open", instruction="Open.", cancel=False,
-             now=100.0, args=("timeout=5",))
+def test_scored_instruction_keeps_probe_verdict_and_failed_timeout():
+    from vla.progress_probe import ProgressState
+
+    m = SubtaskMachine(step_timeout_s=30.0, scorer=has_head, unscored_timeout_s=8.0)
+    m.on_cmd(plan_id="p", index=0, action="pick", instruction="Pick up the cucumber.",
+             cancel=False, now=100.0, args=("cucumber",))
     assert m.scored()
-    assert m.timeout_s() == 5.0
-    assert m.tick(now=105.0) is Effect.FREEZE
-    f = m.state_fields()
-    assert f.status is SubtaskStatus.FAILED
-    assert f.detail == "timeout 5s"
+    assert m.timeout_s() == 30.0
+    assert m.tick(now=108.0) is Effect.NONE  # the unscored timeout does not apply
+    assert m.on_progress(ProgressState.DONE, 0.8, now=110.0) is Effect.FREEZE
+    assert m.state_fields().detail == "done (progress 0.80)"
+
+    m2 = SubtaskMachine(step_timeout_s=30.0, scorer=has_head, unscored_timeout_s=8.0)
+    m2.on_cmd(plan_id="p", index=0, action="pick", instruction="Pick up the cucumber.",
+              cancel=False, now=100.0)
+    assert m2.tick(now=130.0) is Effect.FREEZE
+    assert m2.state_fields().status is SubtaskStatus.FAILED
+    assert m2.state_fields().detail == "timeout 30s"
 
 
-def test_timeout_arg_zero_disables_for_that_subtask():
-    m = SubtaskMachine(step_timeout_s=30.0)
-    m.on_cmd(plan_id="p", index=0, action="open", instruction="Open.", cancel=False,
-             now=100.0, args=("timeout=0",))
-    assert m.timeout_s() == 0.0
-    assert m.tick(now=1e9) is Effect.NONE
-    assert m.state_fields().status is SubtaskStatus.RUNNING
+def test_per_instruction_unscored_timeout_wins_over_default():
+    m = SubtaskMachine(scorer=has_head, unscored_timeout_s=8.0,
+                       unscored_timeouts={"Step back from the refrigerator.": 3.0})
+    m.on_cmd(plan_id="p", index=0, action="step_back",
+             instruction="Step back from the refrigerator.", cancel=False, now=100.0)
+    assert m.timeout_s() == 3.0
+    assert m.tick(now=103.0) is Effect.FREEZE
+    assert m.state_fields().detail == "done (timeout 3s)"
 
 
-def test_verdict_off_without_timeout_runs_until_cancel():
-    m = SubtaskMachine()
-    m.on_cmd(plan_id="p", index=0, action="push", instruction="Push.", cancel=False,
-             now=100.0, args=("verdict=off",))
+def test_unscored_without_timeout_runs_until_cancel():
+    m = SubtaskMachine(step_timeout_s=30.0, scorer=has_head, unscored_timeout_s=0.0)
+    m.on_cmd(plan_id="p", index=0, action="approach", instruction="Walk.", cancel=False,
+             now=100.0)
     assert not m.scored()
-    assert m.tick(now=1e9) is Effect.NONE
+    assert m.tick(now=1e9) is Effect.NONE  # not even the scored 30 s applies
     assert m.state_fields().status is SubtaskStatus.RUNNING
     assert m.on_cmd(plan_id="p", index=0, action="", instruction="", cancel=True,
                     now=1e9 + 1) is Effect.FREEZE
     assert m.state_fields().status is SubtaskStatus.IDLE
 
 
-def test_args_knobs_reset_on_the_next_subtask():
-    m = SubtaskMachine(step_timeout_s=30.0)
-    m.on_cmd(plan_id="p", index=0, action="push", instruction="Push.", cancel=False,
-             now=100.0, args=("verdict=off", "timeout=8"))
-    m.tick(now=108.0)
-    m.on_cmd(plan_id="p", index=1, action="open", instruction="Open.", cancel=False, now=108.1)
+def test_probe_override_arg_reaches_the_scorer():
+    m = SubtaskMachine(scorer=has_head, unscored_timeout_s=8.0)
+    m.on_cmd(plan_id="p", index=0, action="approach", instruction="Walk.", cancel=False,
+             now=100.0, args=("fridge", "probe=probe_any"))
+    assert m.scored()
+
+
+def test_no_scorer_means_everything_scored():
+    m = SubtaskMachine(step_timeout_s=30.0, unscored_timeout_s=8.0)  # --cortex, no --probe
+    m.on_cmd(plan_id="p", index=0, action="approach", instruction="Walk.", cancel=False,
+             now=100.0)
     assert m.scored()
     assert m.timeout_s() == 30.0
 
 
-def test_cmd_args_parse():
-    from vla.cortex import cmd_args
-
-    a = cmd_args.parse(["fridge_door", "probe=probe_pick_v2.pt", "verdict=off", "timeout=8.5"])
-    assert (a.probe, a.verdict, a.timeout_s) == ("probe_pick_v2", False, 8.5)
-    d = cmd_args.parse(["fridge_door"])
-    assert (d.probe, d.verdict, d.timeout_s) == (None, True, None)
-    # malformed values are ignored, never fatal
-    bad = cmd_args.parse(["timeout=soon", "verdict=maybe"])
-    assert bad.timeout_s is None and bad.verdict is True
+def test_scoring_is_decided_per_subtask():
+    m = SubtaskMachine(step_timeout_s=30.0, scorer=has_head, unscored_timeout_s=8.0)
+    m.on_cmd(plan_id="p", index=0, action="approach", instruction="Walk.", cancel=False,
+             now=100.0)
+    assert not m.scored()
+    m.tick(now=108.0)
+    m.on_cmd(plan_id="p", index=1, action="pick", instruction="Pick up the cucumber.",
+             cancel=False, now=108.1)
+    assert m.scored()
+    assert m.timeout_s() == 30.0

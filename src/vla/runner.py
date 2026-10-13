@@ -66,9 +66,16 @@ class Config:
     step_timeout_s: float = 0.0
     """--cortex only: fail a RUNNING subtask after this many seconds
     (detail "timeout <s>s", posture held). <= 0 disables (v0.1 default —
-    tune after real-robot measurement). A cmd overrides it per subtask with
-    args timeout=<s>; with args verdict=off the subtask is unscored and its
-    timeout ends it as DONE instead (src/vla/cortex/cmd_args.py)."""
+    tune after real-robot measurement). Applies to SCORED subtasks — ones
+    whose instruction has a probe head; see --unscored-timeout-s."""
+
+    unscored_timeout_s: float = 10.0
+    """--cortex with --probe: a subtask whose instruction has NO probe head
+    runs unscored and is DONE after this many seconds (detail
+    "done (timeout <s>s)", posture held) — unless the index lists that
+    sentence with its own number. <= 0: it runs until the orchestrator
+    cancels. Keep it under the orchestrator's own VLA step timeout (30 s)
+    or it gives up first."""
 
     embodiment_tag: str = "unitree_g1_sonic_3views"
     """Which of the checkpoint's embodiments to run."""
@@ -98,11 +105,14 @@ class Config:
     """Seconds between status lines (inference latency, cursor health)."""
 
     probe: str | None = None
-    """Progress probe: one .pt, or a JSON index {"<fit prompt>": "<.pt>", ...}
-    (shared/probe/probes.json). With the index the .pt whose prompt equals the
-    live instruction is selected per subtask (--cortex) and loaded on first
-    use; a cmd may force one with args=["probe=<name>"]. Only valid with the
-    checkpoint the probes were fitted on. None disables the probe."""
+    """Progress probe: one .pt, or a JSON index (shared/probe/<ckpt>/probes.json)
+    {"<fit prompt>": "<.pt>", ..., "<prompt without a head>": <seconds>, ...}.
+    With the index the .pt whose prompt equals the live instruction is
+    selected per subtask (--cortex) and loaded on first use; a cmd may force
+    one with args=["probe=<name>"]. A prompt listed with a number instead of
+    a .pt runs unscored and is DONE that many seconds after it starts. Only
+    valid with the checkpoint the probes were fitted on. None disables the
+    probe."""
 
     probe_dir: str = "shared/probe"
     """Where the per-rollout progress JSONL goes (host-mounted via shared/)."""
@@ -202,7 +212,15 @@ def main(config: Config) -> None:
     if config.cortex:
         from .cortex import CortexBridge, Effect, SubtaskMachine
 
-        machine = SubtaskMachine(step_timeout_s=config.step_timeout_s)
+        machine = SubtaskMachine(
+            step_timeout_s=config.step_timeout_s,
+            # Scored or not is the instruction's call: does the probe index
+            # hold a head fitted on it? Without --probe nothing is scored
+            # by anyone, so every subtask keeps the FAILED step timeout.
+            scorer=None if probe is None else probe.scores,
+            unscored_timeout_s=config.unscored_timeout_s,
+            unscored_timeouts={} if probe is None else probe.timeouts,
+        )
         bridge = CortexBridge(machine, cursor)
 
     # Progress monitor (only when probe AND cortex are both on): turns the
@@ -275,15 +293,11 @@ def main(config: Config) -> None:
             if probe is not None:
                 # New subtask? (cortex) Select the head fitted on its prompt —
                 # or the cmd's probe= override — and reset the running max,
-                # BEFORE reading this prediction's score. verdict=off: no
-                # head at all, so read() stays None and no verdict is fed.
+                # BEFORE reading this prediction's score.
                 if machine is not None:
                     current_subtask_id = machine.subtask_id()
                     if current_subtask_id != last_subtask_id:
-                        if machine.scored():
-                            probe.select(prompt, override=machine.probe_override())
-                        else:
-                            probe.deselect(prompt, "verdict=off: unscored, ends by timeout")
+                        probe.select(prompt, override=machine.probe_override())
                         if monitor is not None:
                             monitor.reset()
                         last_subtask_id = current_subtask_id

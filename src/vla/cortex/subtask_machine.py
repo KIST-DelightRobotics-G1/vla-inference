@@ -12,7 +12,7 @@ The v0.3 state machine (a RUNNING subtask is never replaced, only ended):
                           │  │──probe: DONE───────────────▶ DONE ×3 → IDLE
                           │  │──probe: STALLED────────────▶ FAILED ×3 → IDLE
                           │  └──step timeout──────────────▶ FAILED ×3 → IDLE
-                          │        (args verdict=off: ───▶ DONE ×3 → IDLE)
+                          │     (unscored: timeout ───────▶ DONE ×3 → IDLE)
                           │
                           └── any other cmd while RUNNING: IGNORED (no change)
     IDLE ──unsupported cmd──▶ FAILED ×3 → IDLE      "unsupported: <why>"
@@ -27,10 +27,15 @@ its (plan_id, index) never appear in SubtaskState; the bridge logs it.
 DONE and FAILED are published for _FINAL_REPEATS bridge ticks (~300 ms) as
 QoS edge-loss insurance, then auto-reset to IDLE per the ICD.
 
-Per-subtask knobs ride in the cmd's args (cmd_args.py): `verdict=off` runs
-the subtask unscored — no probe, no DONE/STALLED — and lets its timeout end
-it as DONE ("done (timeout <s>s)") instead of FAILED; `timeout=<s>` sets
-that subtask's step timeout over the runner's default.
+Scored or unscored is decided per subtask from its instruction, at cmd
+time: `scorer(instruction, probe_override)` (the runner passes the probe
+bank's lookup — is there a head fitted on this exact sentence?). Scored:
+the probe's verdict ends it, the step timeout is the FAILED backstop as
+above. Unscored (no head, e.g. approach / step_back): no verdict is taken
+and the unscored timeout ends it as DONE, "done (timeout <s>s)" — the
+sentence's own number in probes.json (`unscored_timeouts`), else the
+runner's --unscored-timeout-s; 0 = no timeout, it runs until cancel. No scorer = every subtask scored
+(the --cortex-without---probe run: verdicts never come, timeout = FAILED).
 
 Appendix-A detail values: "" (nominal), "cancelled", "unsupported: <why>",
 "timeout <s>s", "done (progress N.NN)", "stalled at N.NN",
@@ -47,11 +52,11 @@ holds its last commanded posture instead of blending to safe standing.
 import threading
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable, Mapping
 
 from common.cyclonedds.cortex_msgs import SubtaskStatus
 
-from ..progress_probe import ProgressState
-from . import cmd_args
+from ..progress_probe import ProgressState, override_from_args
 
 # Actions this module cannot perform — the ICD routes move_to to nav.
 UNSUPPORTED_ACTIONS = frozenset({"move_to"})
@@ -84,19 +89,33 @@ class SubtaskMachine:
     """Thread-safe: the bridge's 10 Hz thread mutates, the inference loop
     reads `instruction()` — one lock covers both."""
 
-    def __init__(self, *, step_timeout_s: float = 0.0):
-        """`step_timeout_s` <= 0 disables the timeout (tune after real-robot
-        measurement, per the ICD note)."""
+    def __init__(
+        self,
+        *,
+        step_timeout_s: float = 0.0,
+        scorer: Callable[[str, str | None], bool] | None = None,
+        unscored_timeout_s: float = 0.0,
+        unscored_timeouts: Mapping[str, float] | None = None,
+    ):
+        """`step_timeout_s` <= 0 disables the FAILED timeout of a scored
+        subtask (tune after real-robot measurement, per the ICD note).
+        `scorer(instruction, probe_override) -> bool` says whether a probe
+        head scores that sentence; None = always. An unscored subtask ends
+        DONE after `unscored_timeouts[instruction]`, else `unscored_timeout_s`
+        (<= 0: never — cancel only)."""
         self._lock = threading.Lock()
         self._timeout_s = step_timeout_s
+        self._scorer = scorer
+        self._unscored_timeout_s = unscored_timeout_s
+        self._unscored_timeouts = dict(unscored_timeouts or {})
         self._status = SubtaskStatus.IDLE
         self._plan_id = ""
         self._index = 0
         self._action = ""
         self._instruction = ""
         self._args: tuple[str, ...] = ()
-        self._verdict = True            # False: unscored, timeout -> DONE
-        self._subtask_timeout_s = 0.0   # this subtask's (args or default)
+        self._scored = True             # False: no verdict, timeout -> DONE
+        self._subtask_timeout_s = 0.0   # this subtask's timeout (0 = none)
         self._detail = ""
         self._progress = 0.0            # last probe verdict's progress, published
         self._deadline: float | None = None
@@ -133,7 +152,7 @@ class SubtaskMachine:
         RUNNING → DONE (state=DONE) or FAILED (state=STALLED) with FREEZE.
         Anything else is a no-op (already terminal, or not our concern)."""
         with self._lock:
-            if self._status is not SubtaskStatus.RUNNING or not self._verdict:
+            if self._status is not SubtaskStatus.RUNNING or not self._scored:
                 return Effect.NONE
             self._progress = progress
             if state is ProgressState.DONE:
@@ -160,15 +179,15 @@ class SubtaskMachine:
                     self._reset_to_idle()
                 return Effect.NONE
             # Step timeout — bridge's own clock, independent of orchestrator.
-            # An unscored subtask (verdict=off) has no other way to end
-            # well: its timeout IS the plan, so it lands as DONE.
+            # Scored: the probe never said DONE in time -> FAILED. Unscored:
+            # the timeout IS the plan -> DONE.
             if (
                 self._status is SubtaskStatus.RUNNING
                 and self._deadline is not None
                 and now >= self._deadline
             ):
                 t = self._subtask_timeout_s
-                if self._verdict:
+                if self._scored:
                     self._status = SubtaskStatus.FAILED
                     self._detail = f"timeout {t:g}s"
                 else:
@@ -218,11 +237,18 @@ class SubtaskMachine:
         self._status = SubtaskStatus.RUNNING
         self._instruction = instruction
         self._args = tuple(args)
-        knobs = cmd_args.parse(self._args)
-        self._verdict = knobs.verdict
-        self._subtask_timeout_s = (
-            self._timeout_s if knobs.timeout_s is None else knobs.timeout_s
-        )
+        # Scored or not is the instruction's call (is a head fitted on it?),
+        # and that picks which timeout runs and what it lands as.
+        if self._scorer is None:
+            self._scored = True
+        else:
+            self._scored = bool(self._scorer(instruction, override_from_args(self._args)))
+        if self._scored:
+            self._subtask_timeout_s = self._timeout_s
+        else:
+            self._subtask_timeout_s = self._unscored_timeouts.get(
+                instruction, self._unscored_timeout_s
+            )
         self._detail = ""
         self._progress = 0.0
         self._deadline = (
@@ -241,7 +267,7 @@ class SubtaskMachine:
         self._action = ""
         self._instruction = ""
         self._args = ()
-        self._verdict = True
+        self._scored = True
         self._subtask_timeout_s = 0.0
         self._detail = detail
         self._progress = 0.0
@@ -262,17 +288,17 @@ class SubtaskMachine:
         with self._lock:
             if self._status is not SubtaskStatus.RUNNING:
                 return None
-            return cmd_args.parse(self._args).probe
+            return override_from_args(self._args)
 
     def scored(self) -> bool:
-        """True while a RUNNING subtask takes probe verdicts. False on
-        `verdict=off` (runner: select no head, read no score) and while
-        nothing is running."""
+        """True while a RUNNING subtask takes probe verdicts; False for an
+        unscored one (no head for its instruction: ends DONE by timeout)
+        and while nothing runs."""
         with self._lock:
-            return self._status is SubtaskStatus.RUNNING and self._verdict
+            return self._status is SubtaskStatus.RUNNING and self._scored
 
     def timeout_s(self) -> float:
-        """The RUNNING subtask's step timeout (args or default), 0 = none."""
+        """The RUNNING subtask's timeout in seconds, 0 = none."""
         with self._lock:
             if self._status is not SubtaskStatus.RUNNING:
                 return 0.0

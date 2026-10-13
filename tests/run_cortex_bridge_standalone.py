@@ -11,14 +11,22 @@ with scripts/send_subtask.py on the same domain and watch:
     cancel  -> "instruction -> None"        + state IDLE detail='cancelled'
               + "cursor frozen: repeating step N" (the posture hold)
     move_to -> state FAILED detail='unsupported: ...'
+    unscored (instruction not in --scored-prompts, with --unscored-timeout-s)
+            -> state DONE detail='done (timeout <s>s)' + the posture hold
 
 Run (vla container, NO robot needed — pick a domain off the robot bus):
     python tests/run_cortex_bridge_standalone.py --domain 42
     python scripts/send_subtask.py --domain 42 --action open --instruction "Open."
+
+    # stand-in for the probe bank: "Open." has a head, anything else is unscored
+    python tests/run_cortex_bridge_standalone.py --domain 42 --step-timeout-s 30 \
+        --scored-prompts "Open." --unscored-timeout-s 8
+    python scripts/send_subtask.py --domain 42 --action approach \
+        --instruction "Walk up to the fridge." --watch-s 10
 """
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import tyro
@@ -34,7 +42,15 @@ class Config:
     """DDS domain — keep OFF the robot bus (0) for bench runs."""
 
     step_timeout_s: float = 0.0
-    """Subtask timeout to exercise the FAILED path (0 = off)."""
+    """Scored-subtask timeout to exercise the FAILED path (0 = off)."""
+
+    scored_prompts: list[str] = field(default_factory=list)
+    """Stand-in for the probe index: these exact sentences count as having a
+    head (scored); any other instruction runs unscored. Empty = no scorer,
+    everything scored (a --cortex run without --probe)."""
+
+    unscored_timeout_s: float = 0.0
+    """Unscored subtasks end DONE after this (0 = run until cancel)."""
 
     run_s: float = 60.0
     """How long to keep the bridge up."""
@@ -42,7 +58,12 @@ class Config:
 
 def main(config: Config) -> None:
     cursor = ChunkCursor()
-    machine = SubtaskMachine(step_timeout_s=config.step_timeout_s)
+    scored = set(config.scored_prompts)
+    machine = SubtaskMachine(
+        step_timeout_s=config.step_timeout_s,
+        scorer=None if not scored else (lambda instruction, override: instruction in scored),
+        unscored_timeout_s=config.unscored_timeout_s,
+    )
     bridge = CortexBridge(machine, cursor)
     bridge.start(domain_id=config.domain)
 

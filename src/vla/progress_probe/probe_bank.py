@@ -1,22 +1,54 @@
-"""Which probe .pt scores this subtask? Pure selection logic, no torch, no I/O.
+"""Which probe .pt scores this subtask? Pure selection logic, no torch.
 
 A probe is fitted on one (checkpoint, prompt) pair, so the head that scores
 a subtask must be the one fitted on that subtask's instruction. The runner
-keeps an index {fit prompt -> .pt path} (shared/probe/probes.json) and
-`pick()` turns it plus the live instruction into one path or None — None
-means "no probe for this prompt": no score, no verdict (RUNNING until
-timeout / cortex), which beats scoring with a mismatched head.
+keeps an index (shared/probe/<checkpoint>/probes.json) — one entry per
+sentence the orchestrator may send, saying how a subtask with that
+instruction ENDS:
+
+    "<fit prompt>": "probe_open.pt"    a head scores it: DONE / STALLED by verdict
+    "<fit prompt>": 8                  no head: unscored, DONE 8 s after start
+
+`load_index()` splits the file into those two maps; `pick()` turns the
+first plus the live instruction into one path or None — None means "no
+probe for this prompt": no score, no verdict, the subtask ends by its
+unscored timeout (its number here, else the runner's --unscored-timeout-s).
+That beats scoring with a mismatched head.
 
 Override: an orchestrator cmd may carry ``args=["probe=<name>"]`` to force a
 .pt by file stem — the experiment hook for comparing two fits of the same
 prompt (scripts/send_subtask.py --args probe=probe_pick_v2).
 """
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Sequence
 
 OVERRIDE_KEY = "probe="
+
+
+def load_index(path: str) -> tuple[dict[str, str], dict[str, float]]:
+    """probes.json -> ({prompt: absolute .pt path}, {prompt: timeout_s}).
+
+    A string value is a .pt relative to the json's directory; a number is
+    the unscored timeout in seconds for that sentence. Anything else is a
+    config error, raised here so a typo fails at startup, not mid-run."""
+    with open(path) as f:
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: expected an object {{prompt: .pt | seconds}}")
+    base = os.path.dirname(os.path.abspath(path))
+    heads: dict[str, str] = {}
+    timeouts: dict[str, float] = {}
+    for prompt, value in raw.items():
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise ValueError(f"{path}: {prompt!r}: value must be a .pt name or seconds, got {value!r}")
+        if isinstance(value, str):
+            heads[prompt] = os.path.join(base, value)
+        else:
+            timeouts[prompt] = float(value)
+    return heads, timeouts
 
 
 @dataclass(frozen=True)

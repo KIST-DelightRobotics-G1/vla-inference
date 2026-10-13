@@ -22,12 +22,11 @@ pairing.
 This module imports torch — inference-container only, like sonic_policy.
 """
 
-import json
 import os
 
 import torch
 
-from .probe_bank import pick
+from .probe_bank import load_index, pick
 
 FEATURE_DIM = 2048
 
@@ -67,11 +66,13 @@ class ProgressProbe:
     """Hook a Gr00tN1d7 model once; score each prediction with the active head.
 
     `path` is one .pt (that head is active from the start, as before) or a
-    JSON index {"<fit prompt>": "<relative .pt path>", ...} — a bank, one head
-    per fitted prompt. With a bank nothing is active until select(): the
-    runner calls it with the live instruction whenever the subtask changes;
-    the matching .pt is loaded on first use (25 KB, milliseconds) and cached,
-    and read() returns None while no head matches (no score, no verdict).
+    JSON index {"<fit prompt>": "<relative .pt path>" | <timeout s>, ...} —
+    a bank, one head per fitted prompt, plus the sentences that have no head
+    and end by timeout instead (`timeouts`, read by the SubtaskMachine).
+    With a bank nothing is active until select(): the runner calls it with
+    the live instruction whenever the subtask changes; the matching .pt is
+    loaded on first use (25 KB, milliseconds) and cached, and read() returns
+    None while no head matches (no score, no verdict).
 
     Lifecycle:
 
@@ -88,21 +89,21 @@ class ProgressProbe:
         self._feature: torch.Tensor | None = None
         self._handle = None
         if path.endswith(".json"):
-            with open(path) as f:
-                index: dict[str, str] = json.load(f)
-            base = os.path.dirname(os.path.abspath(path))
-            self.index = {prompt: os.path.join(base, rel) for prompt, rel in index.items()}
+            self.index, self.timeouts = load_index(path)
             self.active: ProbeHead | None = None
             self.strict = True
-            print(f"[ProgressProbe] index {path}: {len(self.index)} prompts")
+            print(f"[ProgressProbe] index {path}: {len(self.index)} heads, "
+                  f"{len(self.timeouts)} timeout-only prompts")
             for prompt, pt in self.index.items():
                 print(f"[ProgressProbe]   {os.path.basename(pt)}  <-  {prompt!r}")
+            for prompt, t in self.timeouts.items():
+                print(f"[ProgressProbe]   DONE at {t:g}s (no head)  <-  {prompt!r}")
         else:
             head = self._load(path)
             self.index = {head.prompt or "": path}
+            self.timeouts: dict[str, float] = {}
             self.active = head
             self.strict = False
-        self._single: ProbeHead | None = None if self.strict else self.active
         print("[ProgressProbe] the running checkpoint must be the model the probes were fitted on")
 
     def _load(self, pt_path: str) -> ProbeHead:
@@ -113,6 +114,15 @@ class ProgressProbe:
             print(f"[ProgressProbe] loaded {head.name}  prompt={head.prompt!r}  extractor={head.extractor}")
         return head
 
+    def scores(self, instruction: str, override: str | None = None) -> bool:
+        """Would select(instruction, override) activate a head? The same
+        lookup, no loading, no log — the SubtaskMachine's scorer, decided at
+        cmd time so an unscored subtask gets its DONE timeout from the start.
+        A single .pt scores everything (it stays active and only warns)."""
+        if not self.strict and override is None:
+            return True
+        return pick(list(self.index.items()), instruction, override).path is not None
+
     @property
     def active_name(self) -> str | None:
         return None if self.active is None else self.active.name
@@ -122,7 +132,6 @@ class ProgressProbe:
         stem). Returns its name, or None when nothing matches — then read()
         yields None. A single-file probe stays active and only warns."""
         if not self.strict and override is None:
-            self.active = self._single  # back after a deselect()
             self.check_prompt(instruction)
             reason = "single .pt, always active"
         else:
@@ -142,13 +151,6 @@ class ProgressProbe:
             print(f"[ProgressProbe] PROBE {self.active.name} scores {instruction!r} ({reason})",
                   flush=True)
         return self.active_name
-
-    def deselect(self, instruction: str, reason: str) -> None:
-        """Score nothing until the next select(): read() yields None. For a
-        subtask the orchestrator runs unscored (args verdict=off)."""
-        self.active = None
-        print(f"[ProgressProbe] NO PROBE for {instruction!r} -> no score, no verdict ({reason})",
-              flush=True)
 
     @property
     def meta(self) -> dict:

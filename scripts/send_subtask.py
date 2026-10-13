@@ -12,10 +12,6 @@ Usage (inside the vla container, run_vla.py --cortex running):
     # cancel it (same identity)
     python scripts/send_subtask.py --plan-id p-1758351012-0000 --index 0 --cancel
 
-    # an unscored subtask: no probe verdict, DONE when its 8 s timeout fires
-    python scripts/send_subtask.py --action push --args verdict=off timeout=8 \\
-        --instruction "Push the drawer closed." --watch-s 10
-
 Each start invents a fresh plan_id unless --plan-id pins one; the cmd is
 published once, then SubtaskState is echoed for --watch-s seconds so the
 IDLE/RUNNING/FAILED transition is visible.
